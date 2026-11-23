@@ -1,0 +1,20 @@
+{
+  "name": "duragres-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "record": "bun record.ts",
+    "studio": "remotion studio src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.546",
+    "@remotion/google-fonts": "4.0.546",
+    "@remotion/transitions": "4.0.546",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "remotion": "4.0.546"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2"
+  }
+}

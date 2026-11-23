@@ -11,9 +11,9 @@ try {
     .onConflictDoUpdate({ target: users.email, set: { name: "Ada" } })
     .returning();
   console.log(user);
-  console.log("typeof active:", typeof user!.active);
-  console.log("createdAt instanceof Date:", user!.createdAt instanceof Date);
-  console.log("typeof prefs:", typeof user!.prefs);
+  console.log("typeof active:", typeof user.active);
+  console.log("createdAt instanceof Date:", user.createdAt instanceof Date);
+  console.log("typeof prefs:", typeof user.prefs);
 } finally {
   await client.end();
 }
