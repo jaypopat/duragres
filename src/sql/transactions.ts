@@ -11,18 +11,34 @@
 // Known difference: non-deterministic values (gen_random_uuid(), now()) seen
 // during the transaction can differ from the committed ones, because COMMIT
 // re-executes the statements.
-import { PgError, type Result } from "../postgres/wire";
-import { run, type Params, type Runnable } from "./exec";
+import { PgError, type Field, type Result } from "../postgres/wire";
+import { describe, run, type Params, type Runnable } from "./exec";
 import type { Session } from "./session";
 import type { Statement } from "./statement";
 
 interface Write { stmt: Runnable; params: Params; oids: number[] }
 export interface Tx { log: Write[]; failed: boolean }
 
-/** Carries a statement's result out of the transactionSync that is rolled back. */
-class Preview {
-  constructor(readonly result: Result) {}
+/** Carries a value out of the transactionSync that is rolled back. */
+class Preview<R> {
+  constructor(readonly value: R) {}
 }
+
+/** Runs `fn` on the open transaction's uncommitted state, then rolls everything back. */
+function rolledBack<R>(s: Session, fn: () => R): R {
+  try {
+    inSync(s, () => {
+      if (s.tx) replay(s, s.tx.log);
+      throw new Preview(fn());
+    });
+  } catch (e) {
+    if (e instanceof Preview) return e.value as R;
+    throw e;
+  }
+  throw new Error("unreachable: rolledBack always throws");
+}
+
+const aborted = () => new PgError("25P02", "current transaction is aborted, commands ignored until end of transaction block");
 
 const writes = (stmt: Runnable) => stmt.kind === "addConstraint" || (stmt.kind === "sql" && !stmt.readOnly);
 
@@ -44,20 +60,32 @@ export function execute(stmt: Statement, params: Params, s: Session, oids: numbe
   if (stmt.kind === "transaction") return control(stmt.op, s);
   const tx = s.tx;
   if (!tx) return run(stmt, params, s, oids);
-  if (tx.failed) throw new PgError("25P02", "current transaction is aborted, commands ignored until end of transaction block");
+  if (tx.failed) throw aborted();
   if (!tx.log.length && !writes(stmt)) return run(stmt, params, s, oids);
-  let result: Result | undefined;
-  try {
-    inSync(s, () => {
-      replay(s, tx.log);
-      throw new Preview(run(stmt, params, s, oids));
-    });
-  } catch (e) {
-    if (!(e instanceof Preview)) throw e;
-    result = e.result;
-  }
+  const result = rolledBack(s, () => run(stmt, params, s, oids));
   if (writes(stmt)) tx.log.push({ stmt, params, oids });
-  return result!;
+  return result;
+}
+
+/**
+ * RowDescription fields for a statement, seen from the open transaction, with no side
+ * effects. Falls back to running it and rolling back when it can't be described statically.
+ */
+export function describeStatement(stmt: Statement, params: Params, s: Session, oids: number[]): Field[] | null {
+  if (stmt.kind === "transaction") return null;
+  if (s.tx?.failed) throw aborted();
+  const byRunning = () => {
+    const result = run(stmt, params, s, oids);
+    return result.kind === "rows" ? result.fields : null;
+  };
+  const inspect = () => {
+    const fields = describe(stmt, s);
+    return fields === undefined ? byRunning() : fields;
+  };
+  if (s.tx?.log.length) return rolledBack(s, inspect);
+  const fields = describe(stmt, s);
+  if (fields !== undefined) return fields;
+  return writes(stmt) ? rolledBack(s, byRunning) : byRunning();
 }
 
 function control(op: "begin" | "commit" | "rollback", s: Session): Result {

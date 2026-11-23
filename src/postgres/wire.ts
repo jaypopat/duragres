@@ -49,6 +49,7 @@ export const msg = {
   bindComplete: () => new Body().message("2"),
   closeComplete: () => new Body().message("3"),
   noData: () => new Body().message("n"),
+  portalSuspended: () => new Body().message("s"),
   parameterDescription: (oids: number[]) => {
     const b = new Body().int16(oids.length);
     for (const o of oids) b.int32(o);

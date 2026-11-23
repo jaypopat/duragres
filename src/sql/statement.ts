@@ -20,11 +20,10 @@ export type Statement =
   | { kind: "sql"; node: Node; pg: string; tag: string; dml: boolean; readOnly: boolean };
 
 export function prepare(query: string, s: Session): Statement[] {
-  return splitAndRewrite(query, s).flatMap(({ pg, words }): Statement[] => {
+  return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
     const utility = classifyUtility(words);
     if (utility) return [utility];
-    const catalog = answerCatalogQuery(pg, s);
-    if (catalog) return [{ kind: "catalog", result: catalog }];
+    if (readsCatalog) return [{ kind: "catalog", result: answerCatalogQuery(pg, s) }];
     // A comment-only statement parses to nothing.
     return parse(pg).map((node) => classify(node, pg));
   });
@@ -98,7 +97,7 @@ function sessionValue(fn: string, s: Session): string {
   return s.user;
 }
 
-interface Split { pg: string; words: string[] }
+interface Split { pg: string; words: string[]; readsCatalog: boolean }
 
 /**
  * Non-empty statements of `query` with their first two keywords, flattened schema
@@ -109,14 +108,16 @@ function splitAndRewrite(query: string, s: Session): Split[] {
   const statements: Split[] = [];
   let text = "";
   let words: string[] = [];
+  let readsCatalog = false;
   let at = tokens[0]?.start ?? 0; // query[at, edit) is copied verbatim before each edit
   const emit = (end: number, replacement: string) => {
     text += query.slice(at, end) + replacement;
   };
   const finish = () => {
-    if (text.trim()) statements.push({ pg: text.trim(), words });
+    if (text.trim()) statements.push({ pg: text.trim(), words, readsCatalog });
     text = "";
     words = [];
+    readsCatalog = false;
   };
 
   for (let i = 0; i < tokens.length; i++) {
@@ -131,6 +132,9 @@ function splitAndRewrite(query: string, s: Session): Split[] {
       continue;
     }
     if (words.length < 2) words.push(t.text.toUpperCase());
+    // pg_catalog.current_database() and friends are session functions, rewritten below.
+    const catalogName = tokens[i + 2]?.text.toLowerCase() ?? "";
+    if (isIdentifier(t) && t.text.toLowerCase() === "pg_catalog" && next?.type === "DOT" && !SESSION_FUNCTIONS[catalogName]) readsCatalog = true;
 
     if (isIdentifier(t) && next?.type === "DOT" && prev?.type !== "DOT" && FLAT_SCHEMAS.has(t.text.toLowerCase())) {
       emit(t.start, "");

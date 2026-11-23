@@ -1,7 +1,7 @@
 // Answers for the catalog queries psql 18 sends for \dt, \d <table> and \l.
 // The handlers match the exact queries psql sends (see them with `psql -E`).
 // Everything is derived from sqlite_master and pragma_table_info().
-import { OID, rows as table, type Result } from "../postgres/wire";
+import { OID, PgError, rows as table, type Result } from "../postgres/wire";
 import type { Session } from "./session";
 import { loadCatalog } from "./catalog";
 
@@ -186,20 +186,19 @@ const HANDLERS: Handler[] = [
     },
   },
   {
-    // Anything else aimed at the catalog returns no rows (policies, statistics, publications,
-    // inheritance for \d).
-    name: "pg_catalog fallback",
-    re: /\bpg_catalog\./,
+    // \d also asks for row-level policies, extended statistics, publications and table
+    // inheritance. Duragres has none of these, so the true answer is no rows.
+    name: "\\d empty catalogs",
+    re: /\bFROM pg_catalog\.(pg_policy|pg_statistic_ext|pg_publication|pg_class c, pg_catalog\.pg_inherits)\b/,
     run: () => table([], [], "SELECT 0"),
   },
 ];
 
-
-/** The answer to a catalog query psql sends, or undefined for any other query. */
-export function answerCatalogQuery(sql: string, s: Session): Result | undefined {
+/** The answer to a query that reads pg_catalog; unsupported ones fail with 0A000. */
+export function answerCatalogQuery(sql: string, s: Session): Result {
   for (const h of HANDLERS) {
     const m = h.re.exec(sql);
     if (m) return h.run(m, s);
   }
-  return undefined;
+  throw new PgError("0A000", "duragres does not support this pg_catalog query");
 }

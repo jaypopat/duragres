@@ -116,29 +116,46 @@ const typeOf = (e: Node): PgType | undefined => {
   return declared ? typeFromDeclared(declared) : literalType(e);
 };
 
+export interface OutputColumn { name: string; type?: PgType } // no type: infer from the value
+
+const AGGREGATES = new Set(["count", "sum", "avg", "min", "max"]);
+
+/** The column name Postgres gives a select-list item. */
+function columnName(e: Node): string {
+  if (e.alias) return nameOf(e.alias.alias) ?? "?column?";
+  if (e.column) return nameOf(e.column.name) ?? "?column?";
+  if (e.function) return String(e.function.name).toLowerCase();
+  if (e.cast && (e.cast.this.column || e.cast.this.function)) return columnName(e.cast.this);
+  const key = Object.keys(e)[0];
+  return AGGREGATES.has(key) ? key : "?column?";
+}
+
 /**
- * One type per result column (undefined: infer from the value), or undefined when the
- * columns can't be matched to the select list (e.g. `*` over a table not in the catalog).
+ * The result columns of a SELECT or RETURNING, worked out without running it, or
+ * undefined when they can't be (a set operation, or `*` over a table not in the catalog).
  */
-export function outputTypes(typed: Node, catalog: Catalog, columnCount: number): (PgType | undefined)[] | undefined {
+export function outputColumns(typed: Node, catalog: Catalog): OutputColumn[] | undefined {
   const outputs: Node[] | undefined = typed.select ? typed.select.expressions : bodyOf(typed)?.returning;
   if (!outputs) return undefined;
   const scope = tablesInScope(typed);
-  const out: (PgType | undefined)[] = [];
+  const out: OutputColumn[] = [];
   for (const e of outputs) {
     if (!e.star) {
-      out.push(typeOf(e));
+      out.push({ name: columnName(e), type: typeOf(e) });
       continue;
     }
     const tables = e.star.table ? [scope.get(nameOf(e.star.table)!)] : [...new Set(scope.values())];
     for (const table of tables) {
       const columns = table ? catalog.get(table) : undefined;
       if (!columns) return undefined;
-      out.push(...columns.map((c) => c.type));
+      out.push(...columns.map((c) => ({ name: c.name, type: c.type })));
     }
   }
-  return out.length === columnCount ? out : undefined;
+  return out;
 }
+
+/** Whether a statement returns rows: a query, or a write with RETURNING. */
+export const returnsRows = (node: Node) => Boolean(node.select || node.values || node.union || node.intersect || node.except || bodyOf(node)?.returning?.length);
 
 /** Types for $n parameters from where they appear: compared with a column, in INSERT VALUES, in SET, in LIMIT/OFFSET. */
 export function paramTypes(typed: Node, catalog: Catalog): Map<number, PgType> {
