@@ -13,7 +13,7 @@ test("columns come back typed and parameters are converted", async () => {
     await c.query("INSERT INTO users (name, active, prefs, score) VALUES ($1, $2, $3, $4)", ["ada", true, { theme: "dark", n: 1 }, 1.5]);
     await c.query("INSERT INTO users (name, active, created_at) VALUES ($1, $2, $3)", ["alan", false, new Date("2026-01-02T03:04:05.678Z")]);
 
-    const { rows, fields } = await c.query("SELECT id, name, active, created_at, prefs, public_id, score FROM users ORDER BY id");
+    const { rows, fields } = await c.query<{ active: boolean; created_at: Date; public_id: string }>("SELECT id, name, active, created_at, prefs, public_id, score FROM users ORDER BY id");
     expect(fields.map((f) => [f.name, f.dataTypeID])).toEqual([
       ["id", 23], ["name", 25], ["active", 16], ["created_at", 1184], ["prefs", 3802], ["public_id", 2950], ["score", 701],
     ]);

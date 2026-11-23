@@ -123,7 +123,7 @@ export class Protocol {
           if (!prepared) throw new PgError("26000", `prepared statement "${name}" does not exist`);
           const n = parameterCount(prepared.stmt);
           const params = Array<null>(n).fill(null);
-          return [msg.parameterDescription(Array(n).fill(OID.text)), this.rowDescription(prepared.stmt && describeStatement(prepared.stmt, params, this.s, prepared.oids))];
+          return [msg.parameterDescription(Array<number>(n).fill(OID.text)), this.rowDescription(prepared.stmt && describeStatement(prepared.stmt, params, this.s, prepared.oids))];
         }
         const p = this.portal(name);
         return [this.rowDescription(p.result?.kind === "rows" ? p.result.fields : p.stmt && describeStatement(p.stmt, p.params, this.s, p.oids))];

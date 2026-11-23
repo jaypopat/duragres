@@ -5,7 +5,7 @@ import { WriterLock } from "../sql/lock";
 import { SERVER_VERSION } from "../sql/session";
 import type { Databases, Session } from "../sql/session";
 import { Protocol } from "../postgres/protocol";
-import { closeQuietly, refuse } from "../postgres/socket";
+import { byteStreams, closeQuietly, refuse } from "../postgres/socket";
 import { msg, PgError } from "../postgres/wire";
 import { capture, restore } from "./snapshot";
 import type { Snapshot } from "./snapshot";
@@ -68,10 +68,11 @@ export class PgDO extends DurableObject<Env> {
     // With allowHalfOpen the socket stays open after the client stops sending; treat
     // end of input as the end of the connection so its slot is freed immediately.
     const { promise: inputEnded, resolve: endInput } = Promise.withResolvers<void>();
-    const input = socket.readable.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ flush: () => endInput() }));
+    const streams = byteStreams(socket);
+    const input = streams.readable.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ flush: () => endInput() }));
 
     const conn: PostgresConnection = new PostgresConnection(
-      { readable: input, writable: socket.writable },
+      { readable: input, writable: streams.writable },
       {
         serverVersion: SERVER_VERSION,
         auth: { method: "trust" },

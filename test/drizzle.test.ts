@@ -46,8 +46,8 @@ test("CREATE DATABASE ... TEMPLATE copies committed data, and the copy migrates 
 
     // A new migration applied only to the branch.
     const journalFile = Bun.file(join(migrations, "meta/_journal.json"));
-    const journal = await journalFile.json();
-    const previous = journal.entries.at(-1);
+    const journal: { entries: Array<{ idx: number; when: number; tag: string }> } = await journalFile.json();
+    const previous = journal.entries.at(-1)!;
     const next = { ...previous, idx: previous.idx + 1, when: previous.when + 1, tag: "0001_add_nickname" };
     journal.entries.push(next);
     await Bun.write(journalFile, JSON.stringify(journal));
