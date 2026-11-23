@@ -75,14 +75,14 @@ test("the per-database connection cap refuses extras with 53300 and frees slots 
 });
 
 test("too many new connections from one address are refused with 53400", async () => {
-  let refused: (Error & { code?: string }) | undefined;
+  let refused: unknown;
   for (let i = 0; i < 50 && !refused; i++) {
     const c = new pg.Client(server.database(unique(`burst-${i}`)));
     try {
       await c.connect();
       await c.end();
     } catch (e) {
-      refused = e as Error & { code?: string };
+      refused = e;
     }
   }
   expect(refused).toMatchObject({ code: "53400", message: expect.stringContaining("too many new connections") });

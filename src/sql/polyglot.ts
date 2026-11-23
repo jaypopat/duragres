@@ -32,6 +32,7 @@ export interface Token { type: string; text: string; start: number; end: number 
 /** PostgreSQL tokens with their source offsets; strings and quoted identifiers are one token each. */
 export function tokenize(sql: string): Array<Token> {
   // The SDK types the field as `tokenType`; the WASM returns `token_type`.
+  // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- corrects the SDK's declared field name
   const tokens = check(polyglot.tokenize(sql, Dialect.PostgreSQL)).tokens as Array<TokenInfo & { token_type: string }>;
   return tokens.map((t) => ({ type: t.token_type, text: t.text, start: t.span.start, end: t.span.end }));
 }

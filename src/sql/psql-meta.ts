@@ -19,7 +19,7 @@ interface Rel { oid: number; name: string; kind: "r" | "i"; sql: string | null; 
 
 function relations(s: Session): Array<Rel> {
   return [...s.sql.exec("SELECT rowid, type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','index') ORDER BY rowid").raw()]
-    .map(([rowid, type, name, tbl, sql]) => ({ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? ("r" as const) : ("i" as const), sql: sql as string | null, tbl: String(tbl) }))
+    .map(([rowid, type, name, tbl, sql]) => ({ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? ("r" as const) : ("i" as const), sql: typeof sql === "string" ? sql : null, tbl: String(tbl) }))
     .filter((r) => !HIDDEN.test(r.name) && !HIDDEN.test(r.tbl));
 }
 
@@ -56,7 +56,7 @@ function columns(s: Session, r: Rel): Array<Column> {
       name: String(name),
       type: declared.get(String(name)) ?? formatType(String(type)),
       notnull: Boolean(nn) || Boolean(pk),
-      dflt: serial ? `nextval('${r.name}_${name}_seq'::regclass)` : pgDefault(dflt as string | null),
+      dflt: serial ? `nextval('${r.name}_${name}_seq'::regclass)` : pgDefault(typeof dflt === "string" ? dflt : null),
       pk: Boolean(pk),
     };
   });
@@ -87,7 +87,7 @@ function indexes(s: Session, r: Rel): Array<Index> {
   return out.sort((a, b) => Number(b.primary) - Number(a.primary) || a.name.localeCompare(b.name));
 }
 
-interface ForeignKey { name: string; from: string; def: string }
+interface ForeignKey { name: string; from: string; to: string; def: string }
 
 function foreignKeys(s: Session, r: Rel): Array<ForeignKey> {
   const rows = [...s.sql.exec('SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq', r.name).raw()];
@@ -96,7 +96,7 @@ function foreignKeys(s: Session, r: Rel): Array<ForeignKey> {
     from: r.name,
     def: `FOREIGN KEY (${from}) REFERENCES ${to}(${toCol ?? "id"})`,
     to: String(to),
-  })) as Array<ForeignKey & { to: string }>;
+  }));
 }
 
 const HANDLERS: Array<Handler> = [
@@ -181,7 +181,7 @@ const HANDLERS: Array<Handler> = [
       const id = /pg_partition_ancestors\('(\d+)'\)/.exec(m.input)?.[1];
       const target = relations(s).find((r) => r.oid === Number(id));
       const rows = target
-        ? relations(s).filter((r) => r.kind === "r").flatMap((r) => (foreignKeys(s, r) as Array<ForeignKey & { to: string }>).filter((fk) => fk.to === target.name).map((fk) => [fk.name, fk.from, fk.def]))
+        ? relations(s).filter((r) => r.kind === "r").flatMap((r) => foreignKeys(s, r).filter((fk) => fk.to === target.name).map((fk) => [fk.name, fk.from, fk.def]))
         : [];
       return table([["conname", OID.name], ["ontable", OID.text], ["condef", OID.text]], rows);
     },

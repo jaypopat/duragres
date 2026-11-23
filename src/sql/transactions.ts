@@ -41,17 +41,18 @@ class Rollback extends Error {}
 
 /** Runs `fn` on the open transaction's uncommitted state, then rolls everything back. */
 function rolledBack<R>(s: Session, fn: () => R): R {
-  let value: R | undefined;
+  let result: { value: R } | undefined;
   try {
     inSync(s, () => {
       if (s.tx) replay(s, s.tx.log);
-      value = fn();
+      result = { value: fn() };
       throw new Rollback();
     });
   } catch (e) {
     if (!(e instanceof Rollback)) throw e;
   }
-  return value as R;
+  if (!result) throw new Error("unreachable: the rolled-back function did not run");
+  return result.value;
 }
 
 const aborted = () => new PgError("25P02", "current transaction is aborted, commands ignored until end of transaction block");
