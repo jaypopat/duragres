@@ -4,7 +4,7 @@ import { client, databaseUrl, freshDb, queryAll } from "./setup";
 import { frontend, open, types } from "./wire";
 
 test("the SQL corpus runs over the simple query protocol", async () => {
-  const sql = (await Bun.file("test/fixtures/demo.sql").text()).replace(/^--.*$/gm, "");
+  const sql = (await Bun.file("test/fixtures/demo.sql").text()).replaceAll(/^--.*$/gm, "");
   const statements = sql.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
   expect(statements).toHaveLength(27);
   const c = await client(freshDb("corpus"));

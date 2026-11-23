@@ -169,7 +169,7 @@ function classify(node: Expression, pg: string): Statement {
 }
 
 /** "create_table" -> "CREATE TABLE"; every query reports SELECT. */
-const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.replace(/_/g, " ").toUpperCase());
+const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.replaceAll('_', " ").toUpperCase());
 
 // --- Splitting and rewriting
 

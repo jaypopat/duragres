@@ -26,7 +26,7 @@ function relations(s: Session): Array<Rel> {
 /** psql turns `\d users` into `c.relname OPERATOR(pg_catalog.~) '^(users)$'`. */
 function namePattern(q: string): RegExp | undefined {
   const m = /relname OPERATOR\(pg_catalog\.~\) '((?:[^']|'')*)'/.exec(q);
-  return m ? new RegExp(m[1].replace(/''/g, "'")) : undefined;
+  return m ? new RegExp(m[1].replaceAll('\'\'', "'")) : undefined;
 }
 
 function relByOid(q: string, s: Session): Rel | undefined {

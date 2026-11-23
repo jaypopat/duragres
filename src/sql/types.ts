@@ -42,9 +42,9 @@ const BY_DECLARED: Array<[RegExp, PgType]> = [
 
 /** Declared Postgres type text (as Polyglot generates it, e.g. "VARCHAR(20)") -> type. Arrays and unknowns -> text. */
 export function typeFromDeclared(declared: string): PgType {
-  const d = declared.trim().toUpperCase().replace(/\s+/g, " ");
+  const d = declared.trim().toUpperCase().replaceAll(/\s+/g, " ");
   const hit = BY_DECLARED.find(([re]) => re.test(d))?.[1] ?? T.text;
-  const mods = /\(([\d,\s]+)\)$/.exec(d)?.[1]?.replace(/\s/g, "");
+  const mods = /\(([\d,\s]+)\)$/.exec(d)?.[1]?.replaceAll(/\s/g, "");
   return mods && (hit === T.varchar || hit === T.numeric) ? { ...hit, name: `${hit.name}(${mods})` } : hit;
 }
 

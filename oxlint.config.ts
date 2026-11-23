@@ -27,7 +27,6 @@ export default defineConfig({
     "unicorn/catch-error-name": "off",
     "unicorn/consistent-function-scoping": "off",
     "unicorn/prefer-string-raw": "off",
-    "unicorn/prefer-string-replace-all": "off",
     "unicorn/text-encoding-identifier-case": "off",
   },
   // The preset's TypeScript override turns this back on, so it is disabled after it.

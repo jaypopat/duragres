@@ -63,7 +63,7 @@ export function run(stmt: Runnable, params: Params, s: Session, paramOids: Array
 }
 
 /** PostgreSQL `$n` -> SQLite `?n` (numbered, so reuse and reordering work). Skips string literals. */
-const numberParams = (sql: string) => sql.replace(/'(?:[^']|'')*'|\$(\d+)/g, (m, n) => (n ? `?${n}` : m));
+const numberParams = (sql: string) => sql.replaceAll(/'(?:[^']|'')*'|\$(\d+)/g, (m, n) => (n ? `?${n}` : m));
 
 /** SQLite wants exactly as many values as the highest ?n in the statement. */
 const highestParam = (sql: string) => Math.max(0, ...[...sql.matchAll(/'(?:[^']|'')*'|\?(\d+)/g)].map((m) => Number(m[1] ?? 0)));
