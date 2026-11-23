@@ -1,5 +1,6 @@
 // Per-connection state and the server settings clients ask about with SHOW.
 import { OID, PgError, rows, type Result } from "../postgres/wire";
+import type { WriterLock } from "./lock";
 import type { Tx } from "./transactions";
 
 export const SERVER_VERSION = "16.4";
@@ -9,6 +10,7 @@ export interface Session {
   storage: DurableObjectStorage;
   database: string;
   user: string;
+  lock: WriterLock; // shared by every connection to this database
   tx?: Tx; // open transaction (transactions.ts)
   inSync?: boolean; // already inside transactionSync: DDL must not open its own
 }

@@ -18,7 +18,8 @@ export type Statement =
   | { kind: "noop"; tag: string } // SET, RESET, DISCARD, CREATE/DROP SCHEMA: SQLite has no settings or schemas
   | { kind: "catalog"; result: Result }
   | { kind: "addConstraint"; table: string; constraint: string }
-  | { kind: "sql"; node: Expression; pg: string; tag: string; dml: boolean; readOnly: boolean };
+  // clock: inside a transaction, the start time every reading of the current time returns (determinism.ts)
+  | { kind: "sql"; node: Expression; pg: string; tag: string; dml: boolean; ddl: boolean; readOnly: boolean; clock?: number };
 
 export function prepare(query: string, s: Session): Statement[] {
   return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
@@ -65,7 +66,8 @@ function classify(node: Expression, pg: string): Statement {
   }
   const dml = kind === "insert" || kind === "update" || kind === "delete";
   const writes = findNodes(node, (n) => "insert" in n || "update" in n || "delete" in n);
-  return { kind: "sql", node, pg, tag: commandTag(kind), dml, readOnly: isQuery(node) && !writes.length };
+  const ddl = /^(create|alter|drop)_/.test(kind);
+  return { kind: "sql", node, pg, tag: commandTag(kind), dml, ddl, readOnly: isQuery(node) && !writes.length };
 }
 
 /** "create_table" -> "CREATE TABLE"; every query reports SELECT. */

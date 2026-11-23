@@ -33,7 +33,7 @@ export class Protocol {
   constructor(private s: Session) {}
 
   /** Returns response bytes, or undefined to let pg-gateway handle the message (Terminate). */
-  handle(data: Uint8Array): Uint8Array[] | undefined {
+  async handle(data: Uint8Array): Promise<Uint8Array[] | undefined> {
     const r = new Reader(data);
     if (r.type === "X") return undefined;
     if (r.type === "Q") return this.simple(r.cstr());
@@ -44,7 +44,7 @@ export class Protocol {
     if (r.type === "H") return NOTHING;
     if (this.failed) return NOTHING;
     try {
-      return this.extended(r);
+      return await this.extended(r);
     } catch (e) {
       this.failed = true;
       return [this.error(e)];
@@ -71,12 +71,12 @@ export class Protocol {
     return msg.error(sqliteErrorToPg(e));
   }
 
-  private simple(query: string): Uint8Array[] {
+  private async simple(query: string): Promise<Uint8Array[]> {
     const out: Uint8Array[] = [];
     try {
       const statements = prepare(query, this.s);
       if (!statements.length) out.push(msg.emptyQuery());
-      for (const stmt of statements) out.push(...encodeResult(execute(stmt, [], this.s)));
+      for (const stmt of statements) out.push(...encodeResult(await execute(stmt, [], this.s)));
     } catch (e) {
       out.push(this.error(e));
     }
@@ -84,7 +84,7 @@ export class Protocol {
     return out;
   }
 
-  private extended(r: Reader): Uint8Array[] {
+  private async extended(r: Reader): Promise<Uint8Array[]> {
     switch (r.type) {
       case "P": {
         const name = r.cstr();
@@ -130,7 +130,7 @@ export class Protocol {
         const maxRows = r.int32();
         if (!p.stmt) return [msg.emptyQuery()];
         if (p.done) return [msg.commandComplete(zeroTag(p.result!))];
-        p.result ??= execute(p.stmt, p.params, this.s, p.oids);
+        p.result ??= await execute(p.stmt, p.params, this.s, p.oids);
         if (p.result.kind !== "rows") {
           p.done = true;
           return encodeResult(p.result, false);
