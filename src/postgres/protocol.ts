@@ -48,9 +48,9 @@ export class Protocol {
     if (this.failed) return NOTHING;
     try {
       return await this.extended(r);
-    } catch (e) {
+    } catch (error) {
       this.failed = true;
-      return [this.error(e)];
+      return [this.error(error)];
     }
   }
 
@@ -80,8 +80,8 @@ export class Protocol {
       const statements = prepare(query, this.s);
       if (!statements.length) out.push(msg.emptyQuery());
       for (const stmt of statements) out.push(...encodeResult(await execute(stmt, [], this.s)));
-    } catch (e) {
-      out.push(this.error(e));
+    } catch (error) {
+      out.push(this.error(error));
     }
     out.push(this.ready());
     return out;

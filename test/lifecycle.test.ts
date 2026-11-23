@@ -81,8 +81,8 @@ test("too many new connections from one address are refused with 53400", async (
     try {
       await c.connect();
       await c.end();
-    } catch (e) {
-      refused = e;
+    } catch (error) {
+      refused = error;
     }
   }
   expect(refused).toMatchObject({ code: "53400", message: expect.stringContaining("too many new connections") });
