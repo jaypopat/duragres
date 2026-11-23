@@ -12,7 +12,18 @@ psql 'postgres://demo@localhost:8788/mydb?sslmode=disable'
 
 `bin/psql` runs psql 18 from Docker if you don't have it installed.
 
-To try Drizzle, export that URL as `DATABASE_URL`, then run `bun run migrate` and `bun run demo` in `examples/drizzle`. To fork a database, set `FORK_TOKEN` in `.dev.vars`, export the same value in your shell, and run `bun run demo:fork`. It prints the fork's connection URL.
+To try Drizzle, export that URL as `DATABASE_URL`, then run `bun run migrate` and `bun run demo` in `examples/drizzle`.
+
+## Branching
+
+Connected to a database, copy it into a new one and drop the copy when you're done:
+
+```sql
+CREATE DATABASE "try-migration" TEMPLATE "mydb";  -- copies mydb's committed data
+DROP DATABASE "try-migration";                    -- WITH (FORCE) closes its connections first
+```
+
+The copy gets its own storage and expiry. Being connected to a database is what lets you copy it; knowing a name is what lets you connect to it or drop it. Neither statement can run inside a transaction.
 
 ## Checks
 
@@ -32,10 +43,9 @@ New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit bind
 ## Layout
 
 - `src/gateway.ts` reads the StartupMessage, picks the Durable Object by database name and pipes bytes to it.
-- `src/database/` is the Durable Object: connections, create-on-connect, expiry and snapshots.
+- `src/database/` is the Durable Object: connections, create-on-connect, expiry, and the snapshots `CREATE DATABASE ... TEMPLATE` sends to the new database over RPC.
 - `src/postgres/` encodes and decodes wire-protocol messages.
 - `src/sql/` translates PostgreSQL to SQLite with Polyglot and answers the catalog queries psql and ORMs send.
-- `src/fork.ts` handles `POST /forks?source=<name>`, which copies a database through an R2 snapshot.
 
 ## Prototype limits
 
@@ -43,4 +53,4 @@ Connections are plaintext with trust authentication. Parameters must be sent in 
 
 Durable Object SQLite has no interactive transactions: it rejects `BEGIN` and `SAVEPOINT`, and an open `storage.transaction()` blocks the object until it ends. So a transaction's writes are logged, previewed in a rolled-back `transactionSync` for each statement, and replayed at COMMIT. Two rules make the replay commit exactly what the client saw. A transaction holds the database's single writer lock from its first write to COMMIT, so other writes wait. Each write is made deterministic first: `now()` is the transaction's start time, and omitted volatile defaults and `gen_random_uuid()` in `INSERT ... VALUES` become literal values. Other randomness in a write inside a transaction fails with SQLSTATE 0A000.
 
-Forks accept snapshots up to 1 MiB.
+A copy is sent between Durable Objects in one RPC message, which bounds the size of a database that can be copied.
