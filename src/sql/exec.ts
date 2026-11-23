@@ -24,6 +24,8 @@ const SQLITE_ERRORS: [RegExp, string, string][] = [
   [/no such column/, "42703", "column does not exist"],
   [/no such function/, "42883", "function does not exist"],
   [/already exists/, "42P07", "relation already exists"],
+  // Polyglot translates constructs SQLite can't express into a call to sqlite_fail().
+  [/sqlite_fail/, "0A000", "not supported by duragres"],
   [/syntax error|incomplete input|unrecognized token/, "42601", "syntax error"],
   [/datatype mismatch/, "42804", "datatype mismatch"],
   [/too many SQL variables|wrong number of arguments/, "42601", "wrong number of parameters"],
