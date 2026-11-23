@@ -1,7 +1,7 @@
 // Polyglot: PostgreSQL parsing, type annotation and PostgreSQL -> SQLite translation.
 // In workerd it is initialised from the precompiled WebAssembly.Module wrangler gives a `.wasm` import.
-import polyglot, { Dialect, findAll, getInferredType } from '@polyglot-sql/sdk/manual';
-import type { Schema, TokenInfo } from '@polyglot-sql/sdk/manual';
+import polyglot, { Dialect, findAll, getInferredType } from "@polyglot-sql/sdk/manual";
+import type { Schema, TokenInfo } from "@polyglot-sql/sdk/manual";
 import wasmModule from "@polyglot-sql/sdk/polyglot_sql.wasm";
 import { PgError } from "../postgres/wire";
 

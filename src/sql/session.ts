@@ -1,6 +1,6 @@
 // Per-connection state and the server settings clients ask about with SHOW.
-import { OID, PgError, rows } from '../postgres/wire';
-import type { Result } from '../postgres/wire';
+import { OID, PgError, rows } from "../postgres/wire";
+import type { Result } from "../postgres/wire";
 import type { WriterLock } from "./lock";
 import type { Tx } from "./transactions";
 
