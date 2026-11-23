@@ -9,6 +9,7 @@ import { PgError } from "../postgres/wire";
 /** One AST node: an object with a single key naming its kind, e.g. `{ select: Select }`. */
 export type Expression = Extract<ReturnType<typeof polyglot.parse>, { success: true }>["ast"][number];
 /** The node of kind K, e.g. `Variant<"select">` is `{ select: Select }`. */
+// oxlint-disable-next-line quality/no-unsafe-dictionary-type -- selects union members by key; no values are stored
 export type Variant<K extends string> = Extract<Expression, Record<K, unknown>>;
 /** The body of a node of kind K, e.g. `Body<"select">` is `Select`. */
 export type Body<K extends string> = Variant<K>[K & keyof Variant<K>];
