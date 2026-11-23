@@ -18,7 +18,6 @@ export default defineConfig({
     "typescript/await-thenable": "off",
     "typescript/no-non-null-assertion": "off",
     "typescript/no-unnecessary-type-assertion": "off",
-    "typescript/no-unsafe-type-assertion": "off",
     "unicorn/catch-error-name": "off",
     "unicorn/consistent-function-scoping": "off",
     "unicorn/text-encoding-identifier-case": "off",
