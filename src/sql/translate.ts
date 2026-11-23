@@ -13,7 +13,7 @@ const UUID_V4 =
 const SQLITE_TOKENS = /'(?:[^']|'')*'|"(?:[^"]|"")*"|\bDEFAULT\s+CURRENT_TIMESTAMP\b|\b(?:BIG|SMALL)?SERIAL\s+PRIMARY\s+KEY\b|\bUUID\(\)|\bCURRENT_TIMESTAMP\s*([+-])\s*INTERVAL\s+'(\d+)\s+(second|minute|hour|day|month|year)s?'/gi;
 
 function sqliteSyntax(sql: string): string {
-  return sql.replace(SQLITE_TOKENS, (token, sign, amount, unit) => {
+  return sql.replaceAll(SQLITE_TOKENS, (token, sign, amount, unit) => {
     if (token.startsWith("'") || token.startsWith('"')) return token;
     if (sign) return `datetime('now', '${sign}${amount} ${unit.toLowerCase()}')`;
     // Millisecond precision, so stored timestamps sort and round-trip like timestamptz.
