@@ -132,7 +132,7 @@ export class Protocol {
         const p = this.portal(r.cstr());
         const maxRows = r.int32();
         if (!p.stmt) return [msg.emptyQuery()];
-        if (p.done) return [msg.commandComplete(zeroTag(p.result!))];
+        if (p.done && p.result) return [msg.commandComplete(zeroTag(p.result))];
         p.result ??= await execute(p.stmt, p.params, this.s, p.oids);
         if (p.result.kind !== "rows") {
           p.done = true;

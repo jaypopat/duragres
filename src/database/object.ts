@@ -77,8 +77,9 @@ export class PgDO extends DurableObject<Env> {
         serverVersion: SERVER_VERSION,
         auth: { method: "trust" },
         onAuthenticated: async (state) => {
-          const writer = conn.streamWriter!;
-          const user = state.clientParams!.user;
+          const writer = conn.streamWriter;
+          const user = state.clientParams?.user;
+          if (!writer || user === undefined) throw new Error("pg-gateway authenticated a connection with no stream or user");
           for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
           session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock, databases: this.databases, isolation: "read committed" };

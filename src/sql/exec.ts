@@ -74,9 +74,10 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
   const inferred = paramTypes(typed, catalog);
   const params = rawParams.map((v, i) => decodeParam(v, typeByOid(paramOids[i] ?? 0) ?? inferred.get(i + 1)));
   let sqlite = (expandDefaults(stmt.node) ?? [stmt.pg]).flatMap(translate).map(numberParams);
-  if (stmt.clock !== undefined && !stmt.ddl) {
+  const clock = stmt.clock;
+  if (clock !== undefined && !stmt.ddl) {
     // DDL keeps 'now' in its defaults: they are evaluated when rows are inserted.
-    sqlite = sqlite.map((q) => freezeClock(q, stmt.clock!));
+    sqlite = sqlite.map((q) => freezeClock(q, clock));
     if (!stmt.readOnly && sqlite.some(usesRandomness)) {
       throw new PgError("0A000", "duragres cannot keep a random value consistent inside a transaction; generate it in the client or in INSERT ... VALUES");
     }

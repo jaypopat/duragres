@@ -16,8 +16,6 @@ export default defineConfig({
     "quality/no-unknown-returns": "off",
     "quality/no-unsafe-dictionary-type": "off",
     "typescript/await-thenable": "off",
-    "typescript/no-non-null-assertion": "off",
-    "typescript/no-unnecessary-type-assertion": "off",
     "unicorn/catch-error-name": "off",
     "unicorn/consistent-function-scoping": "off",
     "unicorn/text-encoding-identifier-case": "off",
