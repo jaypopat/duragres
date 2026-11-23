@@ -1,73 +1,46 @@
-// Shadow catalog: the declared Postgres type of every column, kept in
-// `_pg_columns` next to the SQLite tables, plus AST analysis that uses it to
-// type result columns and bound parameters.
-import { dataTypeSql, parsePg } from "./polyglot";
+// Shadow catalog: the declared PostgreSQL type of every column, kept in `_pg_columns`
+// next to the SQLite tables. Polyglot annotates statements against it to type result
+// columns; parameters are typed from the column they are compared with or stored in.
+import type { Schema } from "@polyglot-sql/sdk/manual";
+import { dataTypeSql, inferredType, type Node } from "./polyglot";
 import { T, typeByOid, typeFromDeclared, type PgType } from "./types";
-
-interface CatalogColumn { name: string; type: PgType }
-type Catalog = Map<string, CatalogColumn[]>; // table -> columns in ordinal order
 
 export const CATALOG_DDL =
   "CREATE TABLE IF NOT EXISTS _pg_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL, pg_type TEXT NOT NULL, oid INTEGER NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY (table_name, column_name))";
 
+interface CatalogColumn { name: string; declared: string; type: PgType }
+type Catalog = Map<string, CatalogColumn[]>; // table -> columns in ordinal order
+
 export function loadCatalog(sql: SqlStorage): Catalog {
-  const cat: Catalog = new Map();
-  for (const [t, c, declared, oid] of sql.exec("SELECT table_name, column_name, pg_type, oid FROM _pg_columns ORDER BY table_name, ordinal").raw()) {
+  const catalog: Catalog = new Map();
+  for (const [table, column, declared, oid] of sql.exec("SELECT table_name, column_name, pg_type, oid FROM _pg_columns ORDER BY table_name, ordinal").raw()) {
     const type = { ...(typeByOid(Number(oid)) ?? T.text), name: typeFromDeclared(String(declared)).name };
-    const cols = cat.get(String(t)) ?? [];
-    cols.push({ name: String(c), type });
-    cat.set(String(t), cols);
+    const columns = catalog.get(String(table)) ?? [];
+    columns.push({ name: String(column), declared: String(declared), type });
+    catalog.set(String(table), columns);
   }
-  return cat;
+  return catalog;
 }
 
-// --- AST helpers. Polyglot's AST is plain JSON; these accessors keep the shape assumptions in one place.
-// biome-ignore lint: the Polyglot AST is untyped JSON at this boundary
-type Node = any;
+/** The catalog in the shape Polyglot's type annotation expects. */
+export function schemaOf(catalog: Catalog): Schema {
+  return { tables: [...catalog].map(([name, columns]) => ({ name, columns: columns.map((c) => ({ name: c.name, type: c.declared })) })) };
+}
+
+// --- DDL: how a statement changes the catalog, applied in the same transaction as the DDL.
 
 const nameOf = (n: Node): string | undefined => n?.name?.name ?? n?.name;
-/** DDL effects on the shadow catalog, computed before execution and applied in the same transaction. */
+const declaredOf = (dataType: Node) => dataTypeSql(dataType) ?? "TEXT";
+
 type CatalogChange =
   | { kind: "create"; table: string; ifNotExists: boolean; columns: { name: string; declared: string }[] }
   | { kind: "drop"; tables: string[] }
   | { kind: "add"; table: string; column: string; declared: string }
   | { kind: "dropColumn"; table: string; column: string };
 
-interface Analysis {
-  stmt?: Node;
-  changes: CatalogChange[];
-  scope: Map<string, string>; // alias or name -> table
-  outputs?: Node[]; // select list / RETURNING list
-  params: Map<number, PgType>;
-}
-
-function declaredOf(dt: Node): string {
-  const r = dataTypeSql(dt);
-  return r ?? "TEXT";
-}
-
-function scopeOf(stmt: Node): Map<string, string> {
-  const scope = new Map<string, string>();
-  const add = (ref: Node) => {
-    const t = ref?.table;
-    if (!t) return;
-    const name = nameOf(t.name);
-    if (!name) return;
-    scope.set(name, name);
-    const alias = nameOf(t.alias);
-    if (alias) scope.set(alias, name);
-  };
-  const s = stmt.select ?? stmt.update ?? stmt.delete ?? stmt.insert;
-  if (!s) return scope;
-  for (const ref of s.from?.expressions ?? []) add(ref);
-  for (const j of s.joins ?? []) add(j.this);
-  if (stmt.update || stmt.delete || stmt.insert) add({ table: s.table });
-  return scope;
-}
-
-function changesOf(stmt: Node): CatalogChange[] {
-  if (stmt.create_table) {
-    const c = stmt.create_table;
+export function changesOf(node: Node): CatalogChange[] {
+  if (node.create_table) {
+    const c = node.create_table;
     return [{
       kind: "create",
       table: nameOf(c.name.name)!,
@@ -75,10 +48,10 @@ function changesOf(stmt: Node): CatalogChange[] {
       columns: (c.columns ?? []).map((col: Node) => ({ name: nameOf(col.name)!, declared: declaredOf(col.data_type) })),
     }];
   }
-  if (stmt.drop_table) return [{ kind: "drop", tables: stmt.drop_table.names.map((n: Node) => nameOf(n.name)!) }];
-  if (stmt.alter_table) {
-    const table = nameOf(stmt.alter_table.name.name)!;
-    return (stmt.alter_table.actions ?? []).flatMap((a: Node): CatalogChange[] =>
+  if (node.drop_table) return [{ kind: "drop", tables: node.drop_table.names.map((n: Node) => nameOf(n.name)!) }];
+  if (node.alter_table) {
+    const table = nameOf(node.alter_table.name.name)!;
+    return (node.alter_table.actions ?? []).flatMap((a: Node): CatalogChange[] =>
       a.AddColumn ? [{ kind: "add", table, column: nameOf(a.AddColumn.column.name)!, declared: declaredOf(a.AddColumn.column.data_type) }]
       : a.DropColumn ? [{ kind: "dropColumn", table, column: nameOf(a.DropColumn.name)! }]
       : [],
@@ -87,22 +60,7 @@ function changesOf(stmt: Node): CatalogChange[] {
   return [];
 }
 
-export function analyze(pg: string): Analysis {
-  const ast = parsePg(pg);
-  const stmt = ast?.[0];
-  if (!stmt) return { changes: [], scope: new Map(), params: new Map() };
-  const s = stmt.select ?? stmt.update ?? stmt.delete ?? stmt.insert;
-  return {
-    stmt,
-    changes: changesOf(stmt),
-    scope: scopeOf(stmt),
-    outputs: stmt.select ? s.expressions : s?.returning,
-    params: new Map(),
-  };
-}
-
-/** Apply catalog changes. Call inside the same transactionSync as the DDL. */
-export function applyChanges(sql: SqlStorage, changes: CatalogChange[], existedBefore: (t: string) => boolean) {
+export function applyChanges(sql: SqlStorage, changes: CatalogChange[], existedBefore: (table: string) => boolean) {
   for (const ch of changes) {
     if (ch.kind === "create") {
       if (ch.ifNotExists && existedBefore(ch.table)) continue;
@@ -123,77 +81,93 @@ export function applyChanges(sql: SqlStorage, changes: CatalogChange[], existedB
   }
 }
 
-// --- Typing
+// --- Typing, on a statement annotated against the catalog.
 
-function columnType(ref: Node, a: Analysis, cat: Catalog): PgType | undefined {
-  const col = ref.column ?? ref.identifier;
-  if (!col) return undefined;
-  const name = nameOf(col.name) ?? col.name;
-  const qualifier = nameOf(col.table);
-  const tables = qualifier ? [a.scope.get(qualifier)].filter(Boolean) : [...new Set(a.scope.values())];
-  const hits = tables.map((t) => cat.get(t!)?.find((c) => c.name === name)?.type).filter(Boolean) as PgType[];
-  return hits.length && hits.every((h) => h.oid === hits[0].oid) ? hits[0] : undefined;
+const bodyOf = (node: Node): Node => node.select ?? node.insert ?? node.update ?? node.delete;
+
+/** Tables a statement reads, by name and alias, for expanding `*` and `t.*`. */
+function tablesInScope(node: Node): Map<string, string> {
+  const scope = new Map<string, string>();
+  const add = (table: Node) => {
+    const name = nameOf(table?.name);
+    if (!name) return;
+    scope.set(name, name);
+    const alias = nameOf(table.alias);
+    if (alias) scope.set(alias, name);
+  };
+  const body = bodyOf(node);
+  for (const from of body?.from?.expressions ?? []) add(from.table);
+  for (const join of body?.joins ?? []) add(join.this?.table);
+  if (!node.select) add(body?.table);
+  return scope;
 }
 
-function exprType(e: Node, a: Analysis, cat: Catalog): PgType | undefined {
-  if (e.alias) return exprType(e.alias.this, a, cat);
-  if (e.column) return columnType(e, a, cat);
-  if (e.cast) return typeFromDeclared(declaredOf(e.cast.to));
-  if (e.count) return T.int8;
-  // Postgres types integer literals int4 (int8 past 32 bits), others numeric; text literals are text.
-  if (e.literal?.literal_type === "number") {
-    const v = String(e.literal.value);
-    return /^-?\d+$/.test(v) ? (Math.abs(Number(v)) <= 2 ** 31 - 1 ? T.int4 : T.int8) : T.numeric;
-  }
-  if (e.literal?.literal_type === "string") return T.text;
-  return undefined; // inferred from the value
+function literalType(e: Node): PgType | undefined {
+  // Postgres types integer literals int4 (int8 past 32 bits), other numbers numeric, strings text.
+  const literal = e.literal ?? e.alias?.this?.literal;
+  if (literal?.literal_type === "string") return T.text;
+  if (literal?.literal_type !== "number") return undefined;
+  const v = String(literal.value);
+  return /^-?\d+$/.test(v) ? (Math.abs(Number(v)) <= 2 ** 31 - 1 ? T.int4 : T.int8) : T.numeric;
 }
+
+const typeOf = (e: Node): PgType | undefined => {
+  const declared = inferredType(e);
+  return declared ? typeFromDeclared(declared) : literalType(e);
+};
 
 /**
- * One type (or undefined = infer from value) per result column, aligned with SQLite's
- * columns. Returns undefined when the shape can't be aligned (e.g. subqueries in *).
+ * One type per result column (undefined: infer from the value), or undefined when the
+ * columns can't be matched to the select list (e.g. `*` over a table not in the catalog).
  */
-export function outputTypes(a: Analysis, cat: Catalog, columnCount: number): (PgType | undefined)[] | undefined {
-  if (!a.outputs) return undefined;
+export function outputTypes(typed: Node, catalog: Catalog, columnCount: number): (PgType | undefined)[] | undefined {
+  const outputs: Node[] | undefined = typed.select ? typed.select.expressions : bodyOf(typed)?.returning;
+  if (!outputs) return undefined;
+  const scope = tablesInScope(typed);
   const out: (PgType | undefined)[] = [];
-  for (const e of a.outputs) {
-    if (e.star) {
-      const tables = e.star.table ? [a.scope.get(nameOf(e.star.table)!)] : [...new Set(a.scope.values())];
-      for (const t of tables) {
-        const cols = t ? cat.get(t) : undefined;
-        if (!cols) return undefined;
-        out.push(...cols.map((c) => c.type));
-      }
-    } else out.push(exprType(e, a, cat));
+  for (const e of outputs) {
+    if (!e.star) {
+      out.push(typeOf(e));
+      continue;
+    }
+    const tables = e.star.table ? [scope.get(nameOf(e.star.table)!)] : [...new Set(scope.values())];
+    for (const table of tables) {
+      const columns = table ? catalog.get(table) : undefined;
+      if (!columns) return undefined;
+      out.push(...columns.map((c) => c.type));
+    }
   }
   return out.length === columnCount ? out : undefined;
 }
 
-/** Types for $n parameters from where they appear: next to a column, in INSERT VALUES, SET, LIMIT/OFFSET. */
-export function paramTypes(a: Analysis, cat: Catalog): Map<number, PgType> {
+/** Types for $n parameters from where they appear: compared with a column, in INSERT VALUES, in SET, in LIMIT/OFFSET. */
+export function paramTypes(typed: Node, catalog: Catalog): Map<number, PgType> {
   const types = new Map<number, PgType>();
-  const param = (n: Node): number | undefined => n?.parameter?.index;
-  const setFrom = (n: Node, t: PgType | undefined) => { const i = param(n); if (i && t && !types.has(i)) types.set(i, t); };
-  const table = [...new Set(a.scope.values())][0];
-  const byName = (name: string) => (table ? cat.get(table)?.find((c) => c.name === name)?.type : undefined);
-  const stmt = a.stmt;
-  if (stmt?.insert) {
-    const cols: string[] = (stmt.insert.columns ?? []).map((c: Node) => nameOf(c) ?? c.name);
-    for (const row of stmt.insert.values ?? []) row.forEach((v: Node, i: number) => setFrom(v, byName(cols[i])));
+  const set = (n: Node, type: PgType | undefined) => {
+    const index = n?.parameter?.index;
+    if (index && type && !types.has(index)) types.set(index, type);
+  };
+  const table = [...new Set(tablesInScope(typed).values())][0];
+  const column = (name: string) => catalog.get(table)?.find((c) => c.name === name)?.type;
+
+  if (typed.insert) {
+    const columns: string[] = (typed.insert.columns ?? []).map((c: Node) => nameOf(c));
+    for (const row of typed.insert.values ?? []) row.forEach((v: Node, i: number) => set(v, column(columns[i])));
   }
-  if (stmt?.update) for (const [col, v] of stmt.update.set ?? []) setFrom(v, byName(nameOf(col) ?? col.name));
-  const s = stmt?.select;
-  if (s) { setFrom(s.limit?.this, T.int8); setFrom(s.offset?.this, T.int8); }
+  for (const [col, v] of typed.update?.set ?? []) set(v, column(nameOf(col)!));
+  set(typed.select?.limit?.this, T.int8);
+  set(typed.select?.offset?.this, T.int8);
+
   const walk = (n: Node) => {
     if (!n || typeof n !== "object") return;
     if (Array.isArray(n)) return n.forEach(walk);
     if (n.left && n.right) {
-      setFrom(n.right, columnType(n.left, a, cat));
-      setFrom(n.left, columnType(n.right, a, cat));
+      set(n.right, typeOf(n.left));
+      set(n.left, typeOf(n.right));
     }
-    if (n.in?.expressions) for (const v of n.in.expressions) setFrom(v, columnType(n.in.this, a, cat));
-    for (const v of Object.values(n)) walk(v);
+    if (n.in?.expressions) for (const v of n.in.expressions) set(v, typeOf(n.in.this));
+    for (const child of Object.values(n)) walk(child);
   };
-  walk(stmt);
+  walk(typed);
   return types;
 }

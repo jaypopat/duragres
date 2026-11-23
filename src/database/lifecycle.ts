@@ -4,7 +4,7 @@ import { CATALOG_DDL } from "../sql/catalog";
 
 export const DB_NAME = /^[a-z0-9][a-z0-9-]{2,62}$/;
 
-export interface Meta { name: string; createdAt: number; expiresAt: number; claimed: boolean }
+interface Meta { name: string; createdAt: number; expiresAt: number; claimed: boolean }
 
 const META_KEY = "duragres:meta";
 

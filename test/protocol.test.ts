@@ -79,3 +79,30 @@ test("SQL-looking string values survive translation", async () => {
     await c.end();
   }
 });
+
+test("session functions, SHOW and SET are answered without SQLite support", async () => {
+  const name = freshDb("session");
+  const c = await client(name);
+  try {
+    expect((await c.query("SELECT current_database(), upper(current_user) AS who, current_schema")).rows)
+      .toEqual([{ current_database: name, who: "DEMO", current_schema: "public" }]);
+    expect((await c.query("SELECT version()")).rows[0].version).toStartWith("PostgreSQL 16.4");
+    expect((await c.query("SHOW search_path")).rows).toEqual([{ search_path: '"$user", public' }]);
+    expect((await c.query("SET client_min_messages TO warning")).command).toBe("SET");
+    await expect(c.query("SHOW nonsense")).rejects.toMatchObject({ code: "42704" });
+  } finally {
+    await c.end();
+  }
+});
+
+test("a simple query can hold several statements, comments, or nothing", async () => {
+  const c = await client(freshDb("multi"));
+  try {
+    const results = await c.query("CREATE TABLE a (x INT); -- make it\nINSERT INTO a VALUES (1), (2); SELECT x FROM public.a ORDER BY x;") as unknown as { command: string; rows: unknown[] }[];
+    expect(results.map((r) => r.command)).toEqual(["CREATE", "INSERT", "SELECT"]);
+    expect(results[2].rows).toEqual([{ x: 1 }, { x: 2 }]);
+    for (const empty of ["", ";", "-- nothing here"]) expect((await c.query(empty)).rows).toEqual([]);
+  } finally {
+    await c.end();
+  }
+});

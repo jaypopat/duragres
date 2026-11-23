@@ -1,12 +1,18 @@
 // Answers for the catalog queries psql 18 sends for \dt, \d <table> and \l.
 // The handlers match the exact queries psql sends (see them with `psql -E`).
 // Everything is derived from sqlite_master and pragma_table_info().
-import { table, type Handler, type Session } from "./intercept";
-import { OID } from "../postgres/wire";
+import { OID, rows as table, type Result } from "../postgres/wire";
+import type { Session } from "./session";
 import { loadCatalog } from "./catalog";
 
 const OID_BASE = 16384; // first user OID in Postgres
 const HIDDEN = /^(sqlite_|_cf_|__|_pg_|_duragres_)/; // SQLite internals, DO metadata, Miniflare's __miniflare_do_name, our shadow catalog
+
+interface Handler {
+  name: string;
+  re: RegExp;
+  run(m: RegExpExecArray, s: Session): Result;
+}
 
 interface Rel { oid: number; name: string; kind: "r" | "i"; sql: string | null; tbl: string }
 
@@ -92,7 +98,7 @@ function foreignKeys(s: Session, r: Rel): ForeignKey[] {
   })) as (ForeignKey & { to: string })[];
 }
 
-export const META_HANDLERS: Handler[] = [
+const HANDLERS: Handler[] = [
   {
     name: "\\dt",
     re: /FROM pg_catalog\.pg_class c[\s\S]*WHERE c\.relkind IN \('r','p',''\)/,
@@ -188,3 +194,12 @@ export const META_HANDLERS: Handler[] = [
   },
 ];
 
+
+/** The answer to a catalog query psql sends, or undefined for any other query. */
+export function answerCatalogQuery(sql: string, s: Session): Result | undefined {
+  for (const h of HANDLERS) {
+    const m = h.re.exec(sql);
+    if (m) return h.run(m, s);
+  }
+  return undefined;
+}
