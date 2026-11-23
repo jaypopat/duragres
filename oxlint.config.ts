@@ -11,7 +11,6 @@ export default defineConfig({
     "no-console": "off",
     "import/no-namespace": "off",
     "typescript/await-thenable": "off",
-    "unicorn/catch-error-name": "off",
     "unicorn/text-encoding-identifier-case": "off",
   },
   ignorePatterns: [...cloudflare.ignorePatterns, ".agents/**", ".claude/**", ".cloudflare/**", ".wrangler/**"],

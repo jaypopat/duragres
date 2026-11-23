@@ -57,8 +57,8 @@ export function run(stmt: Runnable, params: Params, s: Session, paramOids: Array
       case "sql":
         return runSql(stmt, params, s, paramOids);
     }
-  } catch (e) {
-    throw sqliteErrorToPg(e);
+  } catch (error) {
+    throw sqliteErrorToPg(error);
   }
 }
 

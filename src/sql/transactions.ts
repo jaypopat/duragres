@@ -48,8 +48,8 @@ function rolledBack<R>(s: Session, fn: () => R): R {
       result = { value: fn() };
       throw new Rollback();
     });
-  } catch (e) {
-    if (!(e instanceof Rollback)) throw e;
+  } catch (error) {
+    if (!(error instanceof Rollback)) throw error;
   }
   if (!result) throw new Error("unreachable: the rolled-back function did not run");
   return result.value;
