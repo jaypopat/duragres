@@ -82,6 +82,43 @@ test("a write waits for another connection's open write transaction", async () =
   }
 });
 
+test("read committed sees other commits until its first write; serializable runs alone", async () => {
+  const name = freshDb("tx-isolation");
+  const a = await client(name);
+  const b = await client(name);
+  const count = async () => Number((await a.query("SELECT COUNT(*) AS n FROM t")).rows[0].n);
+  try {
+    await a.query("CREATE TABLE t (id SERIAL PRIMARY KEY)");
+    await a.query("BEGIN");
+    expect((await a.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
+    expect(await count()).toBe(0);
+    await b.query("INSERT INTO t DEFAULT VALUES");
+    expect(await count()).toBe(1);
+    await a.query("COMMIT");
+
+    await a.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    expect((await a.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "serializable" }]);
+    expect(await count()).toBe(1);
+    let bDone = false;
+    const bInsert = b.query("INSERT INTO t DEFAULT VALUES").then(() => (bDone = true));
+    await Bun.sleep(200);
+    expect(bDone).toBe(false);
+    expect(await count()).toBe(1);
+    await a.query("COMMIT");
+    await bInsert;
+    expect(await count()).toBe(2);
+
+    // Raising the level after BEGIN works until the first query.
+    await a.query("BEGIN");
+    await a.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+    expect((await a.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "repeatable read" }]);
+    await expect(a.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).rejects.toMatchObject({ code: "25001" });
+    await a.query("ROLLBACK");
+  } finally {
+    await Promise.all([a.end(), b.end()]);
+  }
+});
+
 test("a connection that disconnects mid-transaction releases the writer lock", async () => {
   const name = freshDb("tx-drop");
   const a = await client(name);

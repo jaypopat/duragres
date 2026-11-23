@@ -10,12 +10,15 @@ import { PgError, type Result } from "../postgres/wire";
 import { QUERY_KINDS, isQuery } from "./catalog";
 import { findNodes, kindOf, parse, tokenize, type Expression, type Token } from "./polyglot";
 import { answerCatalogQuery } from "./psql-meta";
-import { SERVER_VERSION, type Session } from "./session";
+import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting, type Isolation, type Session } from "./session";
 
 export type Statement =
-  | { kind: "transaction"; op: "begin" | "commit" | "rollback" }
+  | { kind: "transaction"; op: "begin"; isolation?: Isolation }
+  | { kind: "transaction"; op: "commit" | "rollback" }
+  // SET [SESSION CHARACTERISTICS AS] TRANSACTION ISOLATION LEVEL, and RESET of it; no level: back to the default
+  | { kind: "isolation"; scope: "transaction" | "session"; level?: Isolation; tag: string }
   | { kind: "show"; name: string }
-  | { kind: "noop"; tag: string } // SET, RESET, DISCARD, CREATE/DROP SCHEMA: SQLite has no settings or schemas
+  | { kind: "noop"; tag: string } // SET of a setting with no effect, DISCARD, CREATE/DROP SCHEMA: SQLite has no schemas
   | { kind: "catalog"; result: Result }
   | { kind: "createDatabase"; name: string; template?: string }
   | { kind: "dropDatabase"; name: string; ifExists: boolean; force: boolean }
@@ -25,7 +28,7 @@ export type Statement =
 
 export function prepare(query: string, s: Session): Statement[] {
   return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
-    const utility = classifyUtility(words) ?? classifyDatabaseCommand(words, pg);
+    const utility = classifyUtility(words, pg) ?? classifyDatabaseCommand(words, pg);
     if (utility) return [utility];
     if (readsCatalog) return [{ kind: "catalog", result: answerCatalogQuery(pg, s) }];
     // A comment-only statement parses to nothing.
@@ -34,11 +37,11 @@ export function prepare(query: string, s: Session): Statement[] {
 }
 
 /** Classifies a statement by its first two keywords, upper-cased. */
-function classifyUtility([first, second = ""]: string[]): Statement | undefined {
+function classifyUtility([first, second = ""]: string[], pg: string): Statement | undefined {
   switch (first) {
     case "BEGIN":
     case "START":
-      return { kind: "transaction", op: "begin" };
+      return { kind: "transaction", op: "begin", isolation: isolationLevel(tokenize(pg)) };
     case "COMMIT":
     case "END":
       return { kind: "transaction", op: "commit" };
@@ -48,11 +51,64 @@ function classifyUtility([first, second = ""]: string[]): Statement | undefined 
     case "SHOW":
       return { kind: "show", name: second.toLowerCase() };
     case "SET":
+      return classifySet(tokenize(pg).slice(1));
     case "RESET":
-      return { kind: "noop", tag: first };
+      return second === "ALL" || second === "DEFAULT_TRANSACTION_ISOLATION" ? { kind: "isolation", scope: "session", tag: "RESET" } : { kind: "noop", tag: "RESET" };
     case "DISCARD":
-      return { kind: "noop", tag: `DISCARD ${second}` };
+      return second === "ALL" ? { kind: "isolation", scope: "session", tag: "DISCARD ALL" } : { kind: "noop", tag: `DISCARD ${second}` };
   }
+}
+
+/** The level after ISOLATION LEVEL in BEGIN, START TRANSACTION or SET TRANSACTION, if any. */
+function isolationLevel(tokens: Token[]): Isolation | undefined {
+  const at = tokens.findIndex((t, i) => t.text.toUpperCase() === "ISOLATION" && tokens[i + 1]?.text.toUpperCase() === "LEVEL");
+  if (at < 0) return undefined;
+  const [a = "", b = ""] = tokens.slice(at + 2, at + 4).map((t) => t.text.toLowerCase());
+  const level = ISOLATION_LEVELS.find((l) => l === a || l === `${a} ${b}`);
+  if (!level) throw new PgError("42601", `syntax error at or near "${a}"`);
+  return level;
+}
+
+/**
+ * SET [SESSION | LOCAL] name {TO | =} value[, ...], plus the special forms TIME ZONE,
+ * NAMES, SCHEMA, TRANSACTION and SESSION CHARACTERISTICS AS TRANSACTION.
+ * `tokens` follow the SET keyword.
+ */
+function classifySet(tokens: Token[]): Statement {
+  const word = (i: number) => tokens[i]?.text.toUpperCase();
+  if (word(0) === "SESSION" && word(1) !== "CHARACTERISTICS" && word(1) !== "AUTHORIZATION") tokens = tokens.slice(1);
+  else if (word(0) === "LOCAL") tokens = tokens.slice(1);
+
+  if (word(0) === "TRANSACTION" || (word(0) === "SESSION" && word(1) === "CHARACTERISTICS")) {
+    const level = isolationLevel(tokens);
+    // SET TRANSACTION READ ONLY and the like change nothing Duragres enforces.
+    if (!level) return { kind: "noop", tag: "SET" };
+    return { kind: "isolation", scope: word(0) === "TRANSACTION" ? "transaction" : "session", level, tag: "SET" };
+  }
+
+  const special: Record<string, [string, number]> = { TIME: ["timezone", 2], NAMES: ["client_encoding", 1], SCHEMA: ["search_path", 1] };
+  let [name, skip] = special[word(0) ?? ""] ?? ["", 0];
+  if (!name) {
+    // A name is identifiers joined by dots (custom settings are "prefix.name").
+    while (skip < tokens.length && !["TO", "="].includes(word(skip)!)) name += tokens[skip++].text.toLowerCase();
+    skip++; // TO or =
+  }
+  // The value: comma-separated items, each one or more tokens (strings arrive unquoted).
+  const items: string[] = [];
+  let item: string[] = [];
+  for (const t of tokens.slice(skip)) {
+    if (t.type === "COMMA") {
+      items.push(item.join(" "));
+      item = [];
+    } else item.push(t.text);
+  }
+  items.push(item.join(" "));
+  checkSetting(name, items);
+  if (name === "transaction_isolation" || name === "default_transaction_isolation") {
+    const level = items.join(" ").toLowerCase();
+    return { kind: "isolation", scope: name === "transaction_isolation" ? "transaction" : "session", level: level === "default" ? undefined : (level as Isolation), tag: "SET" };
+  }
+  return { kind: "noop", tag: "SET" };
 }
 
 /**
