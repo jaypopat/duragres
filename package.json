@@ -1,0 +1,24 @@
+{
+  "name": "duragres",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@polyglot-sql/sdk": "0.14.3",
+    "pg-gateway": "0.3.0-beta.4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261122.2",
+    "pg": "8.23.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.166.0"
+  },
+  "workspaces": [
+    "examples/drizzle"
+  ],
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "typecheck": "bun check",
+    "verify": "bun test/run.mjs",
+    "demo:fork": "bun examples/drizzle/fork.mjs"
+  }
+}

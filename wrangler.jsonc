@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "duragres",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  // Local raw TCP listener -> default export connect(). In production Spectrum
+  // (tcp/5432, Worker origin) delivers connections to the same handler.
+  // "localhost" resolves to ::1 and 127.0.0.1 and workerd listens on both, so psql
+  // (which tries ::1 first) never prints "Connection refused". Loopback only.
+  "connect": [{ "protocol": "tcp", "port": 8788, "address": "localhost" }],
+  "r2_buckets": [{ "binding": "SNAPSHOTS", "bucket_name": "duragres-snapshots" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "PG", "class_name": "PgDO" },
+      { "name": "LIMITS", "class_name": "LimitsDO" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PgDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["LimitsDO"] }
+  ],
+  "vars": {
+    "TTL_SECONDS": "259200",          // 72 h: unclaimed databases are deleted after this
+    "IDLE_TIMEOUT_SECONDS": "600",    // close idle connections (57P05)
+    "MAX_CONNECTIONS": "10",          // per database (53300)
+    "MAX_NEW_DBS_PER_HOUR": "100"     // global creation cap (53400)
+  }
+}

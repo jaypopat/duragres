@@ -1,0 +1,4 @@
+#!/bin/sh
+# psql from the official postgres:18 image (no local install needed). Mounts the CWD at /w.
+TTY=""; [ -t 0 ] && [ -t 1 ] && TTY="-t"
+exec docker run --rm -i $TTY --network host -v "$PWD":/w -w /w -e PAGER=cat postgres:18 psql "$@"
