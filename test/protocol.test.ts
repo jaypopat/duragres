@@ -1,0 +1,81 @@
+// Simple and extended query protocol behaviour, as node-postgres sees it.
+import { expect, test } from "bun:test";
+import { client, freshDb } from "./setup";
+
+test("the SQL corpus runs over the simple query protocol", async () => {
+  const sql = (await Bun.file("test/fixtures/demo.sql").text()).replace(/^--.*$/gm, "");
+  const statements = sql.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
+  expect(statements).toHaveLength(27);
+  const c = await client(freshDb("corpus"));
+  try {
+    for (const statement of statements) await c.query(statement);
+  } finally {
+    await c.end();
+  }
+});
+
+test("parameters, named statements, RETURNING and errors over the extended protocol", async () => {
+  const c = await client(freshDb("extended"));
+  try {
+    await c.query("CREATE TABLE users (id SERIAL PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, active BOOLEAN DEFAULT false)");
+    await c.query("CREATE TABLE posts (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL, views INTEGER DEFAULT 0)");
+    await c.query(`INSERT INTO users (email, name, active) VALUES ('ada@example.com', 'Ada Lovelace', true),
+      ('alan@example.com', 'Alan Turing', true), ('grace@example.com', 'Grace Hopper', true), ('linus@example.com', 'Linus Torvalds', false)`);
+    await c.query("INSERT INTO posts (user_id, title, views) VALUES (1, 'Notes on the Analytical Engine', 121), (2, 'Computing Machinery', 300), (3, 'COBOL tips', 80)");
+
+    expect((await c.query("SELECT id, name, active FROM users WHERE email = $1", ["alan@example.com"])).rows)
+      .toEqual([{ id: 2, name: "Alan Turing", active: true }]);
+    expect((await c.query("SELECT name FROM users WHERE id > $1 AND name ILIKE $2 ORDER BY id", [1, "%o%"])).rows)
+      .toEqual([{ name: "Grace Hopper" }, { name: "Linus Torvalds" }]);
+    expect((await c.query("INSERT INTO posts (user_id, title, views) VALUES ($1, $2, $3) RETURNING id, title", [2, "Hello", 7])).rows)
+      .toEqual([{ id: 4, title: "Hello" }]);
+    for (const [id, title] of [[1, "Notes on the Analytical Engine"], [3, "COBOL tips"]] as const) {
+      expect((await c.query({ name: "by-id", text: "SELECT title FROM posts WHERE id = $1", values: [id] })).rows).toEqual([{ title }]);
+    }
+    expect((await c.query("SELECT COUNT(*) FROM posts")).rows).toEqual([{ count: "4" }]);
+    await expect(c.query("INSERT INTO users (email, name) VALUES ($1, $2)", ["ada@example.com", "dup"])).rejects.toMatchObject({ code: "23505" });
+    expect((await c.query("SELECT $1::text AS still_alive", ["yes"])).rows).toEqual([{ still_alive: "yes" }]);
+  } finally {
+    await c.end();
+  }
+});
+
+test("every extended-protocol Execute runs its statement exactly once", async () => {
+  const c = await client(freshDb("once"));
+  try {
+    await c.query("CREATE TABLE hits (id SERIAL PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, label TEXT)");
+    const count = async () => Number((await c.query("SELECT COUNT(*) AS n FROM hits")).rows[0].n);
+
+    expect((await c.query("INSERT INTO hits (label) VALUES ($1)", ["unnamed"])).rowCount).toBe(1);
+    expect(await count()).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      expect((await c.query({ name: "ins", text: "INSERT INTO hits (label) VALUES ($1)", values: [`named-${i}`] })).rowCount).toBe(1);
+    }
+    expect(await count()).toBe(4);
+
+    await c.query("INSERT INTO hits (label, n) VALUES ('counter', 0)");
+    for (let i = 1; i <= 3; i++) {
+      const r = await c.query({ name: "bump", text: "UPDATE hits SET n = n + 1 WHERE label = $1 RETURNING n", values: ["counter"] });
+      expect(r.rows).toEqual([{ n: i }]);
+    }
+    expect((await c.query("UPDATE hits SET n = n + 1 WHERE label = $1 RETURNING n", ["counter"])).rows).toEqual([{ n: 4 }]);
+
+    const del = { name: "del", text: "DELETE FROM hits WHERE label = $1", values: ["named-0"] };
+    expect((await c.query(del)).rowCount).toBe(1);
+    expect((await c.query(del)).rowCount).toBe(0);
+    expect((await c.query("DELETE FROM hits WHERE label LIKE $1 RETURNING id", ["named-%"])).rowCount).toBe(2);
+    expect(await count()).toBe(2);
+  } finally {
+    await c.end();
+  }
+});
+
+test("SQL-looking string values survive translation", async () => {
+  const c = await client(freshDb("strings"));
+  try {
+    const text = "UUID() DEFAULT CURRENT_TIMESTAMP SERIAL PRIMARY KEY current_database()";
+    expect((await c.query(`SELECT '${text}' AS value`)).rows).toEqual([{ value: text }]);
+  } finally {
+    await c.end();
+  }
+});

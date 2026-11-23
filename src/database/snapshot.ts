@@ -1,6 +1,6 @@
 type Cell = string | number | null | { bytes: number[] };
 type Table = { name: string; ddl: string; columns: string[]; rows: Cell[][] };
-type Snapshot = { version: 1; tables: Table[]; indexes: string[]; sequences: [string, number][] };
+export type Snapshot = { version: 1; tables: Table[]; indexes: string[]; sequences: [string, number][] };
 
 const quote = (name: string) => '"' + name.replaceAll('"', '""') + '"';
 
@@ -11,7 +11,7 @@ export function capture(storage: DurableObjectStorage): Snapshot {
       SELECT name, type, sql FROM sqlite_schema
       WHERE sql IS NOT NULL AND name NOT GLOB 'sqlite_*'
         AND name NOT GLOB '_cf_*' AND name NOT GLOB '__cf_*'
-        AND name NOT IN ('__miniflare_do_name', '_duragres_meta')
+        AND name != '__miniflare_do_name'
       ORDER BY name
     `).toArray();
 
