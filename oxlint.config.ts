@@ -8,13 +8,14 @@ export default defineConfig({
   rules: {
     "@nkzw/no-instanceof": "off",
     "curly": "off",
-    "import/no-namespace": "off",
     "typescript/await-thenable": "off",
     "unicorn/text-encoding-identifier-case": "off",
   },
   overrides: [
     // The example prints what it does.
     { files: ["examples/**"], rules: { "no-console": "off" } },
+    // @cloudflare/config takes the Worker entrypoint as a module namespace (with { type: "cf-worker" }).
+    { files: ["cloudflare.config.ts"], rules: { "import/no-namespace": "off" } },
   ],
   ignorePatterns: [...cloudflare.ignorePatterns, ".agents/**", ".claude/**", ".cloudflare/**", ".wrangler/**"],
 });
