@@ -44,7 +44,7 @@ export const parse = (sql: string): Array<Expression> => check(polyglot.parse(sq
 export const annotate = (sql: string, schema: Schema): Array<Expression> => check(polyglot.annotateTypes(sql, Dialect.PostgreSQL, schema)).ast ?? [];
 
 /** PostgreSQL text for one statement node. Not lossless (SERIAL becomes an identity column), so only for rewritten DML. */
-export const generate = (node: Expression): string => check(polyglot.generate([node], Dialect.PostgreSQL)).sql!.join(";\n");
+export const generate = (node: Expression): string => (check(polyglot.generate([node], Dialect.PostgreSQL)).sql ?? []).join(";\n");
 
 /** SQLite statements for one PostgreSQL statement. */
 export const transpile = (sql: string): Array<string> => check(polyglot.transpile(sql, Dialect.PostgreSQL, Dialect.SQLite)).sql ?? [];

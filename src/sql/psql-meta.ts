@@ -158,9 +158,9 @@ const HANDLERS: Array<Handler> = [
       const r = relByOid(m.input, s);
       const cols: Array<[string, number]> = ["relname", "indisprimary", "indisunique", "indisclustered", "indisvalid", "pg_get_indexdef", "pg_get_constraintdef", "contype", "condeferrable", "condeferred", "indisreplident", "reltablespace", "conperiod"].map((n) => [n, OID.text]);
       const tf = (b: boolean) => (b ? "t" : "f");
-      const rows = (r ? indexes(s, r) : []).map((ix) => {
+      const rows = !r ? [] : indexes(s, r).map((ix) => {
         const constraint = ix.primary ? `PRIMARY KEY (${ix.cols.join(", ")})` : ix.name.endsWith("_key") ? `UNIQUE (${ix.cols.join(", ")})` : null;
-        const def = `CREATE ${ix.unique ? "UNIQUE " : ""}INDEX ${ix.name} ON public.${r!.name} USING btree (${ix.cols.join(", ")})`;
+        const def = `CREATE ${ix.unique ? "UNIQUE " : ""}INDEX ${ix.name} ON public.${r.name} USING btree (${ix.cols.join(", ")})`;
         return [ix.name, tf(ix.primary), tf(ix.unique), "f", "t", def, constraint, ix.primary ? "p" : constraint ? "u" : null, "f", "f", "f", 0, "f"];
       });
       return table(cols, rows);

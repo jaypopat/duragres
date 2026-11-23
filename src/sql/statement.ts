@@ -95,7 +95,7 @@ function classifySet(tokens: Array<Token>): Statement {
   let [name, skip] = SET_SPECIAL_FORMS.get(word(0) ?? "") ?? ["", 0];
   if (!name) {
     // A name is identifiers joined by dots (custom settings are "prefix.name").
-    while (skip < tokens.length && !["TO", "="].includes(word(skip)!)) name += tokens[skip++].text.toLowerCase();
+    while (skip < tokens.length && !["TO", "="].includes(word(skip) ?? "")) name += tokens[skip++].text.toLowerCase();
     skip++; // TO or =
   }
   // The value: comma-separated items, each one or more tokens (strings arrive unquoted).
@@ -133,7 +133,7 @@ function classifyDatabaseCommand([first, second]: Array<string>, pg: string): St
   const name = () => {
     const t = tokens.shift();
     if (!isIdentifier(t)) throw new PgError("42601", `syntax error in ${first} DATABASE: expected a database name`);
-    return t!.type === "VAR" ? t!.text.toLowerCase() : t!.text; // unquoted names fold to lower case
+    return t.type === "VAR" ? t.text.toLowerCase() : t.text; // unquoted names fold to lower case
   };
   const end = () => {
     if (tokens.length) throw new PgError("0A000", `duragres does not support "${tokens[0].text}" in ${first} DATABASE`);
@@ -161,8 +161,8 @@ function classify(node: Expression, pg: string): Statement {
     // SQLite cannot add a constraint to a table; rebuild.ts recreates the table with it.
     const [action, ...rest] = node.alter_table.actions;
     if (!rest.length && typeof action === "object" && "AddConstraint" in action) {
-      const add = tokenize(pg).find((t) => t.type === "ADD")!;
-      return { kind: "addConstraint", table: node.alter_table.name.name.name, constraint: pg.slice(add.end).trim() };
+      const add = tokenize(pg).find((t) => t.type === "ADD");
+      if (add) return { kind: "addConstraint", table: node.alter_table.name.name.name, constraint: pg.slice(add.end).trim() };
     }
   }
   const dml = kind === "insert" || kind === "update" || kind === "delete";
@@ -184,7 +184,7 @@ const SESSION_FUNCTIONS = new Map<string, "call" | "bare" | "either">([
   ["current_database", "call"], ["version", "call"], ["current_schema", "either"], ["current_user", "bare"], ["session_user", "bare"], ["user", "bare"],
 ]);
 
-const isIdentifier = (t?: Token) => t?.type === "VAR" || t?.type === "QUOTED_IDENTIFIER";
+const isIdentifier = (t?: Token): t is Token => t?.type === "VAR" || t?.type === "QUOTED_IDENTIFIER";
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 function sessionValue(fn: string, s: Session): string {

@@ -17,7 +17,8 @@ function rebuildTable(sql: SqlStorage, table: string, constraint: string) {
   // The stored definition is "CREATE TABLE <name> (...)": rename it and add the constraint before the last ")".
   const tokens = tokenize(def);
   const name = tokens[tokens.findIndex((t) => t.type === "TABLE") + 1];
-  const close = tokens.findLast((t) => t.type === "R_PAREN")!;
+  const close = tokens.findLast((t) => t.type === "R_PAREN");
+  if (!name || !close) throw new Error(`unexpected definition of table ${table}: ${def}`);
   const tmp = `${table}__duragres_rebuild`;
   sql.exec(`${def.slice(0, name.start)}"${tmp}"${def.slice(name.end, close.start)}, ${constraint})`);
   sql.exec(`INSERT INTO "${tmp}" SELECT * FROM "${table}"`);

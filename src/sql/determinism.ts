@@ -72,7 +72,7 @@ export function materializeInsert(stmt: Sql, s: Session, clock: number): Sql {
   if (!("insert" in stmt.node)) return stmt;
   const insert = stmt.node.insert;
   const volatile = [...s.sql.exec<{ name: string; dflt_value: string | null }>("SELECT name, dflt_value FROM pragma_table_info(?)", insert.table.name.name)]
-    .filter((c) => c.dflt_value && VOLATILE_DEFAULT.test(c.dflt_value));
+    .flatMap(({ name, dflt_value: dflt }) => (dflt && VOLATILE_DEFAULT.test(dflt) ? [{ name, dflt }] : []));
   const usesUuid = insert.values.flat().some((v) => findNodes(v, isUuidCall).length > 0);
   if (!volatile.length && !usesUuid) return stmt;
   if (insert.query) throw new PgError("0A000", "duragres cannot keep volatile defaults of INSERT ... SELECT consistent inside a transaction");
@@ -82,7 +82,7 @@ export function materializeInsert(stmt: Sql, s: Session, clock: number): Sql {
   const rows = insert.values.length ? insert.values.map((row) => row.map(fixUuids)) : [[]];
   for (const column of volatile) {
     const at = columns.findIndex((c) => c.name === column.name);
-    const value = () => literal(s.sql.exec(`SELECT ${freezeClock(column.dflt_value!, clock)} AS v`).one().v);
+    const value = () => literal(s.sql.exec(`SELECT ${freezeClock(column.dflt, clock)} AS v`).one().v);
     if (at < 0) {
       columns.push(identifier(column.name));
       for (const row of rows) row.push(value());
