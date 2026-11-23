@@ -11,7 +11,7 @@ export function addConstraint(table: string, constraint: string, s: Session) {
 }
 
 function rebuildTable(sql: SqlStorage, table: string, constraint: string) {
-  const def = sql.exec("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", table).raw().next().value?.[0];
+  const def = sql.exec<{ sql: string }>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", table).toArray()[0]?.sql;
   if (typeof def !== "string") throw new Error(`no such table: ${table}`);
   const indexes = [...sql.exec("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL", table).raw()].map(([q]) => String(q));
   // The stored definition is "CREATE TABLE <name> (...)": rename it and add the constraint before the last ")".

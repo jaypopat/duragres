@@ -1,7 +1,7 @@
 // TCP entry point. Reads the StartupMessage to learn the database name, then
 // pipes the connection to the Durable Object of that name. No SQL is parsed here.
 import { DB_NAME } from "./database/lifecycle";
-import { closeQuietly, refuse } from "./postgres/socket";
+import { byteStreams, closeQuietly, refuse } from "./postgres/socket";
 
 const SSL_REQUEST = 80_877_103;
 const GSSENC_REQUEST = 80_877_104;
@@ -19,8 +19,9 @@ function concat(a: Uint8Array, b: Uint8Array) {
 
 /** Reads until the StartupMessage, answering SSLRequest/GSSENCRequest with 'N'. */
 async function readStartup(socket: Socket): Promise<Startup | undefined> {
-  const reader = socket.readable.getReader();
-  const writer = socket.writable.getWriter();
+  const streams = byteStreams(socket);
+  const reader = streams.readable.getReader();
+  const writer = streams.writable.getWriter();
   let buf = new Uint8Array(0);
   const need = async (n: number) => {
     while (buf.length < n) {
