@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { PostgresConnection } from "pg-gateway";
 import { initPolyglot } from "../sql/polyglot";
-import { SERVER_VERSION, type Session } from "../sql/intercept";
+import { SERVER_VERSION, type Session } from "../sql/session";
 import { Protocol } from "../postgres/protocol";
 import { closeQuietly, refuse } from "../postgres/socket";
 import { msg } from "../postgres/wire";

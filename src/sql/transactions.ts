@@ -5,27 +5,29 @@
 // transaction's earlier writes; run this statement; throw to roll back). The
 // client sees its own writes, nothing is committed. COMMIT replays the log for
 // real in one transactionSync; ROLLBACK discards it. After an error the
-// transaction is aborted (25P02) until ROLLBACK/COMMIT, like Postgres.
+// transaction is aborted (25P02) until ROLLBACK/COMMIT, like Postgres; the
+// protocol marks it failed when any statement errors.
 //
 // Known difference: non-deterministic values (gen_random_uuid(), now()) seen
 // during the transaction can differ from the committed ones, because COMMIT
 // re-executes the statements.
-import { runStatement } from "./exec";
-import type { Session } from "./intercept";
 import { PgError, type Result } from "../postgres/wire";
+import { run, type Params, type Runnable } from "./exec";
+import type { Session } from "./session";
+import type { Statement } from "./statement";
 
-interface TxStatement { pg: string; params: (string | null)[]; oids: number[] }
-export interface Tx { log: TxStatement[]; failed: boolean }
+interface Write { stmt: Runnable; params: Params; oids: number[] }
+export interface Tx { log: Write[]; failed: boolean }
 
-const TX_CONTROL = /^\s*(begin|start\s+transaction|commit|end|rollback|abort)\b/i;
-const READ_ONLY = /^\s*(select|show|values|with\s+(?![\s\S]*\b(insert|update|delete)\b))/i;
-
+/** Carries a statement's result out of the transactionSync that is rolled back. */
 class Preview {
   constructor(readonly result: Result) {}
 }
 
-function replay(s: Session, log: TxStatement[]) {
-  for (const t of log) runStatement(t.pg, t.params, s, t.oids);
+const writes = (stmt: Runnable) => stmt.kind === "addConstraint" || (stmt.kind === "sql" && !stmt.readOnly);
+
+function replay(s: Session, log: Write[]) {
+  for (const w of log) run(w.stmt, w.params, s, w.oids);
 }
 
 /** DDL executed during replay joins this storage transaction. */
@@ -38,42 +40,37 @@ function inSync<R>(s: Session, fn: () => R): R {
   }
 }
 
-export function execute(pg: string, params: (string | null)[], s: Session, oids: number[] = []): Result {
-  const ctl = TX_CONTROL.exec(pg)?.[1]?.toLowerCase();
-  if (ctl) {
-    if (ctl === "begin" || ctl.startsWith("start")) {
-      s.tx ??= { log: [], failed: false }; // nested BEGIN is a warning in Postgres; keep the outer one
-      return { kind: "command", tag: "BEGIN" };
-    }
-    const tx = s.tx;
-    s.tx = undefined;
-    if (ctl === "rollback" || ctl === "abort") return { kind: "command", tag: "ROLLBACK" };
-    if (tx?.failed) return { kind: "command", tag: "ROLLBACK" }; // Postgres reports COMMIT of a failed tx as ROLLBACK
-    if (tx?.log.length) inSync(s, () => replay(s, tx.log));
-    return { kind: "command", tag: "COMMIT" };
-  }
-
+export function execute(stmt: Statement, params: Params, s: Session, oids: number[] = []): Result {
+  if (stmt.kind === "transaction") return control(stmt.op, s);
   const tx = s.tx;
-  if (!tx) return runStatement(pg, params, s, oids);
+  if (!tx) return run(stmt, params, s, oids);
   if (tx.failed) throw new PgError("25P02", "current transaction is aborted, commands ignored until end of transaction block");
+  if (!tx.log.length && !writes(stmt)) return run(stmt, params, s, oids);
+  let result: Result | undefined;
   try {
-    if (!tx.log.length && READ_ONLY.test(pg)) return runStatement(pg, params, s, oids);
-    let result: Result | undefined;
-    try {
-      inSync(s, () => {
-        replay(s, tx.log);
-        throw new Preview(runStatement(pg, params, s, oids));
-      });
-    } catch (e) {
-      if (!(e instanceof Preview)) throw e;
-      result = e.result;
-    }
-    if (!READ_ONLY.test(pg)) tx.log.push({ pg, params, oids });
-    return result!;
+    inSync(s, () => {
+      replay(s, tx.log);
+      throw new Preview(run(stmt, params, s, oids));
+    });
   } catch (e) {
-    tx.failed = true;
-    throw e;
+    if (!(e instanceof Preview)) throw e;
+    result = e.result;
   }
+  if (writes(stmt)) tx.log.push({ stmt, params, oids });
+  return result!;
+}
+
+function control(op: "begin" | "commit" | "rollback", s: Session): Result {
+  if (op === "begin") {
+    s.tx ??= { log: [], failed: false }; // a nested BEGIN is a warning in Postgres; keep the outer one
+    return { kind: "command", tag: "BEGIN" };
+  }
+  const tx = s.tx;
+  s.tx = undefined;
+  // Postgres reports COMMIT of a failed transaction as ROLLBACK.
+  if (op === "rollback" || tx?.failed) return { kind: "command", tag: "ROLLBACK" };
+  if (tx?.log.length) inSync(s, () => replay(s, tx.log));
+  return { kind: "command", tag: "COMMIT" };
 }
 
 /** ReadyForQuery status: I idle, T in transaction, E failed transaction. */

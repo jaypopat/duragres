@@ -1,9 +1,12 @@
-// Post-authentication message handling: simple query (Q) and the extended
-// protocol (Parse/Bind/Describe/Execute/Sync) that node-postgres uses for $1 params.
-import { splitStatements, sqliteErrorToPg } from "../sql/exec";
+// Post-authentication message handling: the simple query protocol (Q) and the
+// extended protocol (Parse/Bind/Describe/Execute/Sync) that drivers use for $n parameters.
+import { sqliteErrorToPg, type Params } from "../sql/exec";
+import { findNodes, parse } from "../sql/polyglot";
+import { answerCatalogQuery } from "../sql/psql-meta";
+import type { Session } from "../sql/session";
+import { prepare } from "../sql/statement";
 import { execute, txStatus } from "../sql/transactions";
-import type { Session } from "../sql/intercept";
-import { OID, Reader, decodeText, encodeResult, msg, type Result } from "./wire";
+import { OID, PgError, Reader, decodeText, encodeResult, msg, type Result } from "./wire";
 
 // pg-gateway treats an empty iterable as "not handled" and falls back to its own
 // handler, so "reply with nothing" must be one zero-length chunk.
@@ -11,11 +14,20 @@ const NOTHING = [new Uint8Array(0)];
 
 // A portal runs at most once: Describe runs it and caches the result, Execute
 // returns the cache. A repeated Execute on a finished portal returns no rows.
-interface Portal { sql: string; params: (string | null)[]; oids: number[]; result?: Result; done?: boolean }
+interface Portal { sql: string; params: Params; oids: number[]; result?: Result; done?: boolean }
 
 function zeroTag(r?: Result): string {
   const tag = r && r.kind !== "empty" ? r.tag : "SELECT 0";
   return tag.replace(/\d+$/, "0");
+}
+
+/** The number of $n parameters a statement takes. Unparseable SQL fails later, at Execute. */
+function parameterCount(sql: string): number {
+  try {
+    return Math.max(0, ...parse(sql).flatMap((node) => findNodes(node, (n) => n?.parameter).map((n) => n.parameter.index)));
+  } catch {
+    return 0;
+  }
 }
 
 export class Protocol {
@@ -25,40 +37,59 @@ export class Protocol {
 
   constructor(private s: Session) {}
 
-  private ready() {
-    return msg.readyForQuery(txStatus(this.s));
-  }
-
   /** Returns response bytes, or undefined to let pg-gateway handle the message (Terminate). */
   handle(data: Uint8Array): Uint8Array[] | undefined {
     const r = new Reader(data);
     if (r.type === "X") return undefined;
     if (r.type === "Q") return this.simple(r.cstr());
-    if (r.type === "S") { this.failed = false; return [this.ready()]; }
+    if (r.type === "S") {
+      this.failed = false;
+      return [this.ready()];
+    }
     if (r.type === "H") return NOTHING;
     if (this.failed) return NOTHING;
     try {
       return this.extended(r);
     } catch (e) {
       this.failed = true;
-      return [msg.error(sqliteErrorToPg(e))];
+      return [this.error(e)];
     }
+  }
+
+  private ready() {
+    return msg.readyForQuery(txStatus(this.s));
+  }
+
+  /** An error also aborts the open transaction, as in Postgres. */
+  private error(e: unknown) {
+    if (this.s.tx) this.s.tx.failed = true;
+    return msg.error(sqliteErrorToPg(e));
   }
 
   private simple(query: string): Uint8Array[] {
     const out: Uint8Array[] = [];
-    const stmts = splitStatements(query);
-    if (!stmts.length) out.push(msg.emptyQuery());
-    for (const stmt of stmts) {
-      try {
-        out.push(...encodeResult(execute(stmt, [], this.s)));
-      } catch (e) {
-        out.push(msg.error(sqliteErrorToPg(e)));
-        break;
+    try {
+      const catalog = answerCatalogQuery(query, this.s);
+      if (catalog) out.push(...encodeResult(catalog));
+      else {
+        const statements = prepare(query, this.s);
+        if (!statements.length) out.push(msg.emptyQuery());
+        for (const stmt of statements) out.push(...encodeResult(execute(stmt, [], this.s)));
       }
+    } catch (e) {
+      out.push(this.error(e));
     }
     out.push(this.ready());
     return out;
+  }
+
+  /** One extended-protocol statement. */
+  private run(p: Portal): Result {
+    const catalog = answerCatalogQuery(p.sql, this.s);
+    if (catalog) return catalog;
+    const statements = prepare(p.sql, this.s);
+    if (statements.length > 1) throw new PgError("42601", "cannot insert multiple commands into a prepared statement");
+    return statements.length ? execute(statements[0], p.params, this.s, p.oids) : { kind: "empty" };
   }
 
   private extended(r: Reader): Uint8Array[] {
@@ -73,13 +104,13 @@ export class Protocol {
       case "B": {
         const portal = r.cstr();
         const { sql, oids } = this.statements.get(r.cstr()) ?? { sql: "", oids: [] };
-        const nfmt = r.int16();
-        for (let i = 0; i < nfmt; i++) r.int16(); // text format assumed
-        const params: (string | null)[] = [];
+        const formats = r.int16();
+        for (let i = 0; i < formats; i++) r.int16(); // text format assumed
+        const params: Params = [];
         const n = r.int16();
         for (let i = 0; i < n; i++) {
-          const len = r.int32();
-          params.push(len < 0 ? null : decodeText(r.bytes(len)));
+          const length = r.int32();
+          params.push(length < 0 ? null : decodeText(r.bytes(length)));
         }
         this.portals.set(portal, { sql, params, oids });
         return [msg.bindComplete()];
@@ -88,20 +119,18 @@ export class Protocol {
         const kind = String.fromCharCode(r.byte());
         const name = r.cstr();
         if (kind === "S") {
-          const sql = this.statements.get(name)?.sql ?? "";
-          const n = Math.max(0, ...[...sql.matchAll(/\$(\d+)/g)].map((m) => Number(m[1])));
+          const n = parameterCount(this.statements.get(name)?.sql ?? "");
           return [msg.parameterDescription(Array(n).fill(OID.text)), msg.noData()];
         }
-        // Portal: run now so we can describe the real columns; Execute replays the cached result.
+        // Portal: run now to describe the real columns; Execute returns the cached result.
         const p = this.portals.get(name)!;
-        p.result ??= execute(p.sql, p.params, this.s, p.oids);
+        p.result ??= this.run(p);
         return [p.result.kind === "rows" ? msg.rowDescription(p.result.fields) : msg.noData()];
       }
       case "E": {
-        const name = r.cstr();
-        const p = this.portals.get(name)!;
+        const p = this.portals.get(r.cstr())!;
         if (p.done) return [msg.commandComplete(zeroTag(p.result))];
-        p.result ??= execute(p.sql, p.params, this.s, p.oids);
+        p.result ??= this.run(p);
         p.done = true;
         return encodeResult(p.result, false);
       }

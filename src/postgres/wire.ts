@@ -75,6 +75,12 @@ export const msg = {
   notice: (message: string) => new Body().byte(0x53).cstr("NOTICE").byte(0x56).cstr("NOTICE").byte(0x43).cstr("00000").byte(0x4d).cstr(message).byte(0).message("N"),
 };
 
+/** A result built in code rather than read from SQLite; values are sent as text. */
+export function rows(cols: [string, number][], values: unknown[][], tag = `SELECT ${values.length}`): Extract<Result, { kind: "rows" }> {
+  const fields: Field[] = cols.map(([name, oid]) => ({ name, oid }));
+  return { kind: "rows", fields, rows: values.map((r) => r.map((v) => (v === null || v === undefined ? null : String(v)))), tag };
+}
+
 /** Messages for a full result (no ReadyForQuery). `describe` controls RowDescription. */
 export function encodeResult(r: Result, describe = true): Uint8Array[] {
   if (r.kind === "empty") return [msg.emptyQuery()];
