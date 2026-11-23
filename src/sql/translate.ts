@@ -23,4 +23,4 @@ function sqliteSyntax(sql: string): string {
   });
 }
 
-export const translate = (pg: string): string[] => transpile(pg).map(sqliteSyntax);
+export const translate = (pg: string): Array<string> => transpile(pg).map(sqliteSyntax);

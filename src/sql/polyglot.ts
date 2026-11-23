@@ -29,23 +29,23 @@ function check<T extends { success: boolean; error?: string | null }>(r: T): T {
 export interface Token { type: string; text: string; start: number; end: number }
 
 /** PostgreSQL tokens with their source offsets; strings and quoted identifiers are one token each. */
-export function tokenize(sql: string): Token[] {
+export function tokenize(sql: string): Array<Token> {
   // The SDK types the field as `tokenType`; the WASM returns `token_type`.
-  const tokens = check(polyglot.tokenize(sql, Dialect.PostgreSQL)).tokens as (TokenInfo & { token_type: string })[];
+  const tokens = check(polyglot.tokenize(sql, Dialect.PostgreSQL)).tokens as Array<TokenInfo & { token_type: string }>;
   return tokens.map((t) => ({ type: t.token_type, text: t.text, start: t.span.start, end: t.span.end }));
 }
 
 /** PostgreSQL statements as AST nodes. */
-export const parse = (sql: string): Expression[] => check(polyglot.parse(sql, Dialect.PostgreSQL)).ast ?? [];
+export const parse = (sql: string): Array<Expression> => check(polyglot.parse(sql, Dialect.PostgreSQL)).ast ?? [];
 
 /** Like parse, with each value-producing node annotated with its type from `schema`. */
-export const annotate = (sql: string, schema: Schema): Expression[] => check(polyglot.annotateTypes(sql, Dialect.PostgreSQL, schema)).ast ?? [];
+export const annotate = (sql: string, schema: Schema): Array<Expression> => check(polyglot.annotateTypes(sql, Dialect.PostgreSQL, schema)).ast ?? [];
 
 /** PostgreSQL text for one statement node. Not lossless (SERIAL becomes an identity column), so only for rewritten DML. */
 export const generate = (node: Expression): string => check(polyglot.generate([node], Dialect.PostgreSQL)).sql!.join(";\n");
 
 /** SQLite statements for one PostgreSQL statement. */
-export const transpile = (sql: string): string[] => check(polyglot.transpile(sql, Dialect.PostgreSQL, Dialect.SQLite)).sql ?? [];
+export const transpile = (sql: string): Array<string> => check(polyglot.transpile(sql, Dialect.PostgreSQL, Dialect.SQLite)).sql ?? [];
 
 /** PostgreSQL spelling of a data type node, e.g. "TIMESTAMPTZ" or "VARCHAR(20)". */
 export function dataTypeSql(dataType: DataType): string | undefined {
@@ -59,4 +59,4 @@ export function inferredType(node: Expression): string | undefined {
   return type ? dataTypeSql(type) : undefined;
 }
 
-export const findNodes = (node: Expression, predicate: (n: Expression) => boolean): Expression[] => findAll(node, predicate);
+export const findNodes = (node: Expression, predicate: (n: Expression) => boolean): Array<Expression> => findAll(node, predicate);

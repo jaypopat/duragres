@@ -15,8 +15,8 @@ beforeAll(async () => {
 afterAll(() => server?.stop());
 
 async function open(name: string) {
-  const notices: string[] = [];
-  const errors: (Error & { code?: string })[] = [];
+  const notices: Array<string> = [];
+  const errors: Array<Error & { code?: string }> = [];
   const c = new pg.Client(server.database(name));
   c.on("notice", (n) => notices.push(n.message ?? ""));
   c.on("error", (e) => errors.push(e));

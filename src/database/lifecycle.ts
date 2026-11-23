@@ -29,7 +29,7 @@ export function createNotice(name: string, ttlSeconds: number) {
 }
 
 function humanDuration(seconds: number): string {
-  const units: [number, string][] = [[86400, "day"], [3600, "hour"], [60, "minute"], [1, "second"]];
+  const units: Array<[number, string]> = [[86400, "day"], [3600, "hour"], [60, "minute"], [1, "second"]];
   // Hours up to 4 days: "72 hours" reads better than "3 days".
   const [size, unit] = units.find(([s]) => (s === 86400 ? seconds >= 4 * 86400 : seconds >= s) && seconds % s === 0) ?? [1, "second"];
   const n = seconds / size;

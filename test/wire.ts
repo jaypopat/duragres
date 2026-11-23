@@ -6,14 +6,14 @@ export interface Message { type: string; body: Buffer }
 const cstr = (s: string) => Buffer.from(`${s}\0`);
 const int16 = (n: number) => { const b = Buffer.alloc(2); b.writeInt16BE(n); return b; };
 const int32 = (n: number) => { const b = Buffer.alloc(4); b.writeInt32BE(n); return b; };
-const message = (type: string, ...parts: Buffer[]) => {
+const message = (type: string, ...parts: Array<Buffer>) => {
   const body = Buffer.concat(parts);
   return Buffer.concat([Buffer.from(type), int32(body.length + 4), body]);
 };
 
 export const frontend = {
   parse: (sql: string, name = "") => message("P", cstr(name), cstr(sql), int16(0)),
-  bind: (params: (string | null)[] = [], portal = "", statement = "") =>
+  bind: (params: Array<string | null> = [], portal = "", statement = "") =>
     message("B", cstr(portal), cstr(statement), int16(0), int16(params.length),
       ...params.map((p) => (p === null ? int32(-1) : Buffer.concat([int32(Buffer.byteLength(p)), Buffer.from(p)]))), int16(0)),
   describeStatement: (name = "") => message("D", Buffer.from("S"), cstr(name)),
@@ -39,7 +39,7 @@ export async function open(host: string, port: number, database: string) {
     return msg;
   };
   const untilReady = async () => {
-    const out: Message[] = [];
+    const out: Array<Message> = [];
     for (let m = await next(); ; m = await next()) {
       if (m.type === "Z") return out;
       out.push(m);
@@ -50,7 +50,7 @@ export async function open(host: string, port: number, database: string) {
   socket.write(Buffer.concat([int32(startup.length + 4), startup]));
   await untilReady();
   return {
-    async send(...messages: Buffer[]) {
+    async send(...messages: Array<Buffer>) {
       socket.write(Buffer.concat(messages));
       return untilReady();
     },
@@ -59,4 +59,4 @@ export async function open(host: string, port: number, database: string) {
 }
 
 /** Message types in order, e.g. "1 2 T D D s". */
-export const types = (messages: Message[]) => messages.map((m) => m.type).join(" ");
+export const types = (messages: Array<Message>) => messages.map((m) => m.type).join(" ");

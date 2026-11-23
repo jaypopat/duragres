@@ -16,7 +16,7 @@ interface Handler {
 
 interface Rel { oid: number; name: string; kind: "r" | "i"; sql: string | null; tbl: string }
 
-function relations(s: Session): Rel[] {
+function relations(s: Session): Array<Rel> {
   return [...s.sql.exec("SELECT rowid, type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','index') ORDER BY rowid").raw()]
     .map(([rowid, type, name, tbl, sql]) => ({ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? ("r" as const) : ("i" as const), sql: sql as string | null, tbl: String(tbl) }))
     .filter((r) => !HIDDEN.test(r.name) && !HIDDEN.test(r.tbl));
@@ -46,7 +46,7 @@ function formatType(decl: string): string {
 
 interface Column { name: string; type: string; notnull: boolean; dflt: string | null; pk: boolean }
 
-function columns(s: Session, r: Rel): Column[] {
+function columns(s: Session, r: Rel): Array<Column> {
   const autoinc = /AUTOINCREMENT/i.test(r.sql ?? "");
   const declared = new Map((loadCatalog(s.sql).get(r.name) ?? []).map((c) => [c.name, c.type.name]));
   return [...s.sql.exec("SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?)", r.name).raw()].map(([name, type, nn, dflt, pk]) => {
@@ -70,11 +70,11 @@ function pgDefault(d: string | null): string | null {
   return d;
 }
 
-interface Index { name: string; unique: boolean; primary: boolean; cols: string[] }
+interface Index { name: string; unique: boolean; primary: boolean; cols: Array<string> }
 
 /** Indexes as Postgres would name them: SQLite autoindexes become <table>_<col>_key / _pkey. */
-function indexes(s: Session, r: Rel): Index[] {
-  const out: Index[] = [];
+function indexes(s: Session, r: Rel): Array<Index> {
+  const out: Array<Index> = [];
   const pk = columns(s, r).filter((c) => c.pk).map((c) => c.name);
   const list = [...s.sql.exec("SELECT name, \"unique\", origin FROM pragma_index_list(?)", r.name).raw()];
   if (pk.length && !list.some(([, , origin]) => origin === "pk")) out.push({ name: `${r.name}_pkey`, unique: true, primary: true, cols: pk });
@@ -88,17 +88,17 @@ function indexes(s: Session, r: Rel): Index[] {
 
 interface ForeignKey { name: string; from: string; def: string }
 
-function foreignKeys(s: Session, r: Rel): ForeignKey[] {
+function foreignKeys(s: Session, r: Rel): Array<ForeignKey> {
   const rows = [...s.sql.exec('SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq', r.name).raw()];
   return rows.map(([, to, from, toCol]) => ({
     name: `${r.name}_${from}_fkey`,
     from: r.name,
     def: `FOREIGN KEY (${from}) REFERENCES ${to}(${toCol ?? "id"})`,
     to: String(to),
-  })) as (ForeignKey & { to: string })[];
+  })) as Array<ForeignKey & { to: string }>;
 }
 
-const HANDLERS: Handler[] = [
+const HANDLERS: Array<Handler> = [
   {
     name: "\\dt",
     re: /FROM pg_catalog\.pg_class c[\s\S]*WHERE c\.relkind IN \('r','p',''\)/,
@@ -134,7 +134,7 @@ const HANDLERS: Handler[] = [
       const r = relByOid(m.input, s);
       if (!r) return table([], [], "SELECT 0");
       const hasIndex = r.kind === "r" && indexes(s, r).length ? "t" : "f";
-      const cols: [string, number][] = ["relchecks", "relkind", "relhasindex", "relhasrules", "relhastriggers", "relrowsecurity", "relforcerowsecurity", "relhasoids", "relispartition", "?column?", "reltablespace", "reloftype", "relpersistence", "relreplident", "amname"].map((n) => [n, OID.text]);
+      const cols: Array<[string, number]> = ["relchecks", "relkind", "relhasindex", "relhasrules", "relhastriggers", "relrowsecurity", "relforcerowsecurity", "relhasoids", "relispartition", "?column?", "reltablespace", "reloftype", "relpersistence", "relreplident", "amname"].map((n) => [n, OID.text]);
       return table(cols, [[0, r.kind, hasIndex, "f", "f", "f", "f", "f", "f", "", 0, "", "p", "d", r.kind === "r" ? "heap" : "btree"]]);
     },
   },
@@ -155,7 +155,7 @@ const HANDLERS: Handler[] = [
     re: /^SELECT c2\.relname, i\.indisprimary, i\.indisunique/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
-      const cols: [string, number][] = ["relname", "indisprimary", "indisunique", "indisclustered", "indisvalid", "pg_get_indexdef", "pg_get_constraintdef", "contype", "condeferrable", "condeferred", "indisreplident", "reltablespace", "conperiod"].map((n) => [n, OID.text]);
+      const cols: Array<[string, number]> = ["relname", "indisprimary", "indisunique", "indisclustered", "indisvalid", "pg_get_indexdef", "pg_get_constraintdef", "contype", "condeferrable", "condeferred", "indisreplident", "reltablespace", "conperiod"].map((n) => [n, OID.text]);
       const tf = (b: boolean) => (b ? "t" : "f");
       const rows = (r ? indexes(s, r) : []).map((ix) => {
         const constraint = ix.primary ? `PRIMARY KEY (${ix.cols.join(", ")})` : ix.name.endsWith("_key") ? `UNIQUE (${ix.cols.join(", ")})` : null;
@@ -180,7 +180,7 @@ const HANDLERS: Handler[] = [
       const id = /pg_partition_ancestors\('(\d+)'\)/.exec(m.input)?.[1];
       const target = relations(s).find((r) => r.oid === Number(id));
       const rows = target
-        ? relations(s).filter((r) => r.kind === "r").flatMap((r) => (foreignKeys(s, r) as (ForeignKey & { to: string })[]).filter((fk) => fk.to === target.name).map((fk) => [fk.name, fk.from, fk.def]))
+        ? relations(s).filter((r) => r.kind === "r").flatMap((r) => (foreignKeys(s, r) as Array<ForeignKey & { to: string }>).filter((fk) => fk.to === target.name).map((fk) => [fk.name, fk.from, fk.def]))
         : [];
       return table([["conname", OID.name], ["ontable", OID.text], ["condef", OID.text]], rows);
     },

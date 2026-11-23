@@ -7,12 +7,12 @@ import { generate, type Expression } from "./polyglot";
 const isDefault = (v: Expression) => "var" in v && v.var.this.toUpperCase() === "DEFAULT";
 
 /** Postgres statements to run instead of `stmt`, or undefined when no rewrite is needed. */
-export function expandDefaults(stmt: Expression): string[] | undefined {
+export function expandDefaults(stmt: Expression): Array<string> | undefined {
   if (!("insert" in stmt)) return undefined;
   const insert = stmt.insert;
   const rows = insert.values;
   if (!rows.some((row) => row.some(isDefault))) return undefined;
-  const pattern = (row: Expression[]) => row.map((v) => (isDefault(v) ? "d" : "v")).join("");
+  const pattern = (row: Array<Expression>) => row.map((v) => (isDefault(v) ? "d" : "v")).join("");
   const groups = rows.every((r) => pattern(r) === pattern(rows[0])) ? [rows] : rows.map((r) => [r]);
   return groups.map((group) => {
     const keep = group[0].flatMap((v, i) => (isDefault(v) ? [] : [i]));

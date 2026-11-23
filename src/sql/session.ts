@@ -64,7 +64,7 @@ export function show(name: string, s: Session): Result {
 }
 
 /** The values SET accepts for a setting Duragres can't change: true when `items` say what it already is. */
-const FIXED: Record<string, (items: string[]) => boolean> = {
+const FIXED: Record<string, (items: Array<string>) => boolean> = {
   timezone: ([v, ...rest]) => !rest.length && /^(utc|etc\/utc|gmt|etc\/gmt|z|zulu|0|[+-]?00(:?00)?|local)$/i.test(v),
   client_encoding: ([v, ...rest]) => !rest.length && /^(utf-?8|unicode)$/i.test(v),
   search_path: (items) => items.every((v) => ["public", "$user", "pg_catalog", "drizzle"].includes(v.toLowerCase())),
@@ -77,7 +77,7 @@ const FIXED: Record<string, (items: string[]) => boolean> = {
  * Checks SET `name` to `items` (the comma-separated value, unquoted). Settings with no
  * effect on results (application_name, statement_timeout, ...) are accepted and ignored.
  */
-export function checkSetting(name: string, items: string[]) {
+export function checkSetting(name: string, items: Array<string>) {
   if (items.length === 1 && items[0].toLowerCase() === "default") return;
   if (name === "transaction_isolation" || name === "default_transaction_isolation") {
     if (!ISOLATION_LEVELS.includes(items.join(" ").toLowerCase() as Isolation)) {

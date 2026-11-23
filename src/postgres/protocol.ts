@@ -11,7 +11,7 @@ import { OID, PgError, Reader, decodeText, encodeResult, msg, type Field, type R
 // handler, so "reply with nothing" must be one zero-length chunk.
 const NOTHING = [new Uint8Array(0)];
 
-interface Prepared { stmt?: Statement; oids: number[] } // no stmt: an empty query
+interface Prepared { stmt?: Statement; oids: Array<number> } // no stmt: an empty query
 
 // A portal runs once, at its first Execute. Later Executes page through the rows
 // when the client asked for a row limit, then report zero rows.
@@ -33,7 +33,7 @@ export class Protocol {
   constructor(private s: Session) {}
 
   /** Returns response bytes, or undefined to let pg-gateway handle the message (Terminate). */
-  async handle(data: Uint8Array): Promise<Uint8Array[] | undefined> {
+  async handle(data: Uint8Array): Promise<Array<Uint8Array> | undefined> {
     const r = new Reader(data);
     if (r.type === "X") return undefined;
     if (r.type === "Q") return this.simple(r.cstr());
@@ -57,7 +57,7 @@ export class Protocol {
     return p;
   }
 
-  private rowDescription(fields: Field[] | null | undefined) {
+  private rowDescription(fields: Array<Field> | null | undefined) {
     return fields ? msg.rowDescription(fields) : msg.noData();
   }
 
@@ -71,8 +71,8 @@ export class Protocol {
     return msg.error(sqliteErrorToPg(e));
   }
 
-  private async simple(query: string): Promise<Uint8Array[]> {
-    const out: Uint8Array[] = [];
+  private async simple(query: string): Promise<Array<Uint8Array>> {
+    const out: Array<Uint8Array> = [];
     try {
       const statements = prepare(query, this.s);
       if (!statements.length) out.push(msg.emptyQuery());
@@ -84,7 +84,7 @@ export class Protocol {
     return out;
   }
 
-  private async extended(r: Reader): Promise<Uint8Array[]> {
+  private async extended(r: Reader): Promise<Array<Uint8Array>> {
     switch (r.type) {
       case "P": {
         const name = r.cstr();
