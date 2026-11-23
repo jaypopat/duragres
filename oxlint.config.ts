@@ -12,7 +12,6 @@ export default defineConfig({
     "no-promise-executor-return": "off",
     "import/no-namespace": "off",
     "quality/no-array-filter-map": "off",
-    "quality/no-known-value-widening": "off",
     "quality/no-object-parameters": "off",
     "quality/no-unknown-returns": "off",
     "quality/no-unsafe-dictionary-type": "off",

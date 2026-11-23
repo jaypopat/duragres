@@ -21,6 +21,8 @@ export interface Session {
 export const ISOLATION_LEVELS = ["read uncommitted", "read committed", "repeatable read", "serializable"] as const;
 export type Isolation = (typeof ISOLATION_LEVELS)[number];
 
+export const isIsolation = (level: string): level is Isolation => ISOLATION_LEVELS.some((l) => l === level);
+
 /**
  * What each level gets (transactions.ts). Repeatable read and serializable hold the
  * database's writer lock from BEGIN, so transactions at those levels run one at a time.
@@ -36,7 +38,8 @@ export interface Databases {
   drop(name: string, force: boolean): Promise<"dropped" | "missing" | "in-use">;
 }
 
-const SETTINGS: Record<string, string> = {
+// Maps, not object literals: names come from clients, and "constructor" must not be found.
+const SETTINGS = new Map(Object.entries({
   server_version: SERVER_VERSION,
   server_version_num: "160004",
   server_encoding: "UTF8",
@@ -48,31 +51,31 @@ const SETTINGS: Record<string, string> = {
   intervalstyle: "postgres",
   integer_datetimes: "on",
   max_identifier_length: "63",
-};
+}));
 
-const settingsOf = (s: Session): Record<string, string> => ({
+const settingsOf = (s: Session) => new Map([
   ...SETTINGS,
-  transaction_isolation: s.tx?.isolation ?? s.isolation,
-  default_transaction_isolation: s.isolation,
-});
+  ["transaction_isolation", s.tx?.isolation ?? s.isolation],
+  ["default_transaction_isolation", s.isolation],
+]);
 
 export function show(name: string, s: Session): Result {
   const settings = settingsOf(s);
-  if (name === "all") return { ...rows([["name", OID.text], ["setting", OID.text]], Object.entries(settings)), tag: "SHOW" };
-  const value = settings[name];
+  if (name === "all") return { ...rows([["name", OID.text], ["setting", OID.text]], [...settings]), tag: "SHOW" };
+  const value = settings.get(name);
   if (value === undefined) throw new PgError("42704", `unrecognized configuration parameter "${name}"`);
   return { ...rows([[name, OID.text]], [[value]]), tag: "SHOW" };
 }
 
 /** The values SET accepts for a setting Duragres can't change: true when `items` say what it already is. */
-const FIXED: Record<string, (items: Array<string>) => boolean> = {
+const FIXED = new Map<string, (items: Array<string>) => boolean>(Object.entries({
   timezone: ([v, ...rest]) => !rest.length && /^(utc|etc\/utc|gmt|etc\/gmt|z|zulu|0|[+-]?00(:?00)?|local)$/i.test(v),
   client_encoding: ([v, ...rest]) => !rest.length && /^(utf-?8|unicode)$/i.test(v),
   search_path: (items) => items.every((v) => ["public", "$user", "pg_catalog", "drizzle"].includes(v.toLowerCase())),
   datestyle: (items) => items.every((v) => /^(iso|mdy)$/i.test(v)),
   intervalstyle: ([v, ...rest]) => !rest.length && v.toLowerCase() === "postgres",
-  standard_conforming_strings: ([v, ...rest]) => !rest.length && /^(on|true|1)$/i.test(v),
-};
+  standard_conforming_strings: ([v, ...rest]: Array<string>) => !rest.length && /^(on|true|1)$/i.test(v),
+}));
 
 /**
  * Checks SET `name` to `items` (the comma-separated value, unquoted). Settings with no
@@ -81,13 +84,13 @@ const FIXED: Record<string, (items: Array<string>) => boolean> = {
 export function checkSetting(name: string, items: Array<string>) {
   if (items.length === 1 && items[0].toLowerCase() === "default") return;
   if (name === "transaction_isolation" || name === "default_transaction_isolation") {
-    if (!ISOLATION_LEVELS.includes(items.join(" ").toLowerCase() as Isolation)) {
+    if (!isIsolation(items.join(" ").toLowerCase())) {
       throw new PgError("22023", `invalid value for parameter "${name}": "${items.join(" ")}"`);
     }
     return;
   }
-  const fixed = FIXED[name];
+  const fixed = FIXED.get(name);
   if (fixed && !fixed(items)) {
-    throw new PgError("0A000", `duragres cannot change ${name}: it is always ${SETTINGS[name]}`);
+    throw new PgError("0A000", `duragres cannot change ${name}: it is always ${SETTINGS.get(name)}`);
   }
 }

@@ -38,7 +38,7 @@ class Body {
   }
 }
 
-const TYPLEN: Record<number, number> = { [OID.bool]: 1, [OID.int8]: 8, [OID.int4]: 4, [OID.float8]: 8, [OID.oid]: 4, [OID.name]: 64, [OID.char]: 1 };
+const TYPLEN = new Map<number, number>([[OID.bool, 1], [OID.int8, 8], [OID.int4, 4], [OID.float8, 8], [OID.oid, 4], [OID.name, 64], [OID.char, 1]]);
 
 export const msg = {
   parameterStatus: (k: string, v: string) => new Body().cstr(k).cstr(v).message("S"),
@@ -57,7 +57,7 @@ export const msg = {
   },
   rowDescription(fields: Array<Field>) {
     const b = new Body().int16(fields.length);
-    for (const f of fields) b.cstr(f.name).int32(0).int16(0).int32(f.oid).int16(TYPLEN[f.oid] ?? -1).int32(-1).int16(0);
+    for (const f of fields) b.cstr(f.name).int32(0).int16(0).int32(f.oid).int16(TYPLEN.get(f.oid) ?? -1).int32(-1).int16(0);
     return b.message("T");
   },
   dataRow(values: Array<string | null>) {
