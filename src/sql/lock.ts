@@ -14,7 +14,9 @@ export class WriterLock {
       this.holder = owner;
       return;
     }
-    await new Promise<void>((grant) => this.queue.push({ owner, grant }));
+    await new Promise<void>((grant) => {
+      this.queue.push({ owner, grant });
+    });
   }
 
   /** Releases the lock if `owner` holds it, and stops `owner` waiting for it. */
