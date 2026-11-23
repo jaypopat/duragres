@@ -37,7 +37,7 @@ export interface Tx {
 }
 
 /** Thrown to make transactionSync roll back. */
-const ROLLBACK = Symbol("rollback");
+class Rollback extends Error {}
 
 /** Runs `fn` on the open transaction's uncommitted state, then rolls everything back. */
 function rolledBack<R>(s: Session, fn: () => R): R {
@@ -46,10 +46,10 @@ function rolledBack<R>(s: Session, fn: () => R): R {
     inSync(s, () => {
       if (s.tx) replay(s, s.tx.log);
       value = fn();
-      throw ROLLBACK;
+      throw new Rollback();
     });
   } catch (e) {
-    if (e !== ROLLBACK) throw e;
+    if (!(e instanceof Rollback)) throw e;
   }
   return value as R;
 }
