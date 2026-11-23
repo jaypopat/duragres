@@ -1,4 +1,4 @@
--- Scripted psql demo: bin/psql "postgres://demo@localhost:8788/mydb?sslmode=disable" -f test/fixtures/session.sql
+-- Scripted psql demo: psql postgres://demo@localhost:8788/mydb -f test/fixtures/session.sql
 \set ECHO queries
 \set VERBOSITY verbose
 \echo '=== who am I talking to?'

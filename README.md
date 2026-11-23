@@ -12,7 +12,7 @@ bun run dev
 psql postgres://demo@localhost:8788/mydb
 ```
 
-Any name works in place of `mydb`. No psql installed? `bin/psql` runs psql 18 from Docker.
+Any name works in place of `mydb`.
 
 To try an ORM, run the Drizzle example against the same server:
 
