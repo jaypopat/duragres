@@ -69,7 +69,7 @@ function formatTimestamp(v: string, withZone: boolean): string {
 /** SQLite value -> Postgres text format for the given type. */
 export function encodeValue(v: unknown, type: PgType): string | null {
   if (v === null || v === undefined) return null;
-  if (v instanceof ArrayBuffer) return "\\x" + [...new Uint8Array(v)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  if (v instanceof ArrayBuffer) return String.raw`\x` + [...new Uint8Array(v)].map((b) => b.toString(16).padStart(2, "0")).join("");
   switch (type.oid) {
     case T.bool.oid:
       return v === 1 || v === "1" || v === true || v === "t" || v === "true" ? "t" : v === 0 || v === "0" || v === false || v === "f" || v === "false" ? "f" : String(v);

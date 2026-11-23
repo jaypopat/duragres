@@ -101,7 +101,7 @@ function foreignKeys(s: Session, r: Rel): Array<ForeignKey> {
 
 const HANDLERS: Array<Handler> = [
   {
-    name: "\\dt",
+    name: String.raw`\dt`,
     re: /FROM pg_catalog\.pg_class c[\s\S]*WHERE c\.relkind IN \('r','p',''\)/,
     run: (_m, s) => {
       const q = _m.input;
@@ -111,7 +111,7 @@ const HANDLERS: Array<Handler> = [
     },
   },
   {
-    name: "\\d lookup",
+    name: String.raw`\d lookup`,
     re: /^SELECT c\.oid,\s+n\.nspname,\s+c\.relname\s+FROM pg_catalog\.pg_class c/,
     run: (m, s) => {
       const pat = namePattern(m.input);
@@ -120,7 +120,7 @@ const HANDLERS: Array<Handler> = [
     },
   },
   {
-    name: "\\l",
+    name: String.raw`\l`,
     re: /FROM pg_catalog\.pg_database d/,
     run: (_m, s) =>
       table(
@@ -129,7 +129,7 @@ const HANDLERS: Array<Handler> = [
       ),
   },
   {
-    name: "\\d relation flags",
+    name: String.raw`\d relation flags`,
     re: /^SELECT c\.relchecks, c\.relkind, c\.relhasindex/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
@@ -140,7 +140,7 @@ const HANDLERS: Array<Handler> = [
     },
   },
   {
-    name: "\\d columns",
+    name: String.raw`\d columns`,
     re: /^SELECT a\.attname,\s+pg_catalog\.format_type\(a\.atttypid, a\.atttypmod\)/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
@@ -152,7 +152,7 @@ const HANDLERS: Array<Handler> = [
     },
   },
   {
-    name: "\\d indexes",
+    name: String.raw`\d indexes`,
     re: /^SELECT c2\.relname, i\.indisprimary, i\.indisunique/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
@@ -167,7 +167,7 @@ const HANDLERS: Array<Handler> = [
     },
   },
   {
-    name: "\\d foreign keys",
+    name: String.raw`\d foreign keys`,
     re: /^SELECT true as sametable, conname,/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
@@ -175,7 +175,7 @@ const HANDLERS: Array<Handler> = [
     },
   },
   {
-    name: "\\d referenced by",
+    name: String.raw`\d referenced by`,
     re: /^SELECT conname, conrelid::pg_catalog\.regclass AS ontable,[\s\S]*WHERE confrelid IN/,
     run: (m, s) => {
       const id = /pg_partition_ancestors\('(\d+)'\)/.exec(m.input)?.[1];
@@ -189,7 +189,7 @@ const HANDLERS: Array<Handler> = [
   {
     // \d also asks for row-level policies, extended statistics, publications and table
     // inheritance. Duragres has none of these, so the true answer is no rows.
-    name: "\\d empty catalogs",
+    name: String.raw`\d empty catalogs`,
     re: /\bFROM pg_catalog\.(pg_policy|pg_statistic_ext|pg_publication|pg_class c, pg_catalog\.pg_inherits)\b/,
     run: () => table([], [], "SELECT 0"),
   },
