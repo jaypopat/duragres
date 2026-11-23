@@ -4,10 +4,12 @@ import { defineConfig } from "oxlint";
 export default defineConfig({
   extends: [cloudflare],
   env: cloudflare.env,
-  // Turned off for the migration; each is re-enabled with its fixes or a reason.
   rules: {
+    // One realm (workerd), and the checks are on runtime classes: ArrayBuffer values from SQLite, Date, our own Error subclass.
     "@nkzw/no-instanceof": "off",
+    // The codebase writes guards as one-line `if (...) return ...;`; braces would add 180 lines and no safety.
     "curly": "off",
+    // "UTF8" is PostgreSQL's spelling of the encoding that clients read in ParameterStatus and SHOW.
     "unicorn/text-encoding-identifier-case": "off",
   },
   overrides: [
