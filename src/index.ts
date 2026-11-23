@@ -1,7 +1,5 @@
-import { connect } from "./postgres/gateway";
-import { handleRequest } from "./fork";
-import type { Env } from "./env";
+import { connect } from "./gateway";
+import { fetch } from "./fork";
 
 export { PgDO } from "./database/object";
-export { LimitsDO } from "./database/limits";
-export default { connect, fetch: handleRequest } satisfies ExportedHandler<Env>;
+export default { connect, fetch } satisfies ExportedHandler<Env>;

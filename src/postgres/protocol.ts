@@ -23,7 +23,7 @@ export class Protocol {
   private portals = new Map<string, Portal>();
   private failed = false; // after an extended-protocol error, discard until Sync
 
-  constructor(private s: Session, private log: (line: string) => void = () => {}) {}
+  constructor(private s: Session) {}
 
   private ready() {
     return msg.readyForQuery(txStatus(this.s));
@@ -33,7 +33,7 @@ export class Protocol {
   handle(data: Uint8Array): Uint8Array[] | undefined {
     const r = new Reader(data);
     if (r.type === "X") return undefined;
-    if (r.type === "Q") { const q = r.cstr(); this.log(`Q ${q}`); return this.simple(q); }
+    if (r.type === "Q") return this.simple(r.cstr());
     if (r.type === "S") { this.failed = false; return [this.ready()]; }
     if (r.type === "H") return NOTHING;
     if (this.failed) return NOTHING;
@@ -41,7 +41,6 @@ export class Protocol {
       return this.extended(r);
     } catch (e) {
       this.failed = true;
-      this.log(`ERROR ${(e as Error).message}`);
       return [msg.error(sqliteErrorToPg(e))];
     }
   }
@@ -54,7 +53,6 @@ export class Protocol {
       try {
         out.push(...encodeResult(execute(stmt, [], this.s)));
       } catch (e) {
-        this.log(`ERROR ${(e as Error).message}`);
         out.push(msg.error(sqliteErrorToPg(e)));
         break;
       }
@@ -68,7 +66,6 @@ export class Protocol {
       case "P": {
         const name = r.cstr();
         const sql = r.cstr();
-        this.log(`P[${name}] ${sql}`);
         const oids = Array.from({ length: r.int16() }, () => r.int32());
         this.statements.set(name, { sql, oids });
         return [msg.parseComplete()];

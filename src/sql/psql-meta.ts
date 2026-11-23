@@ -1,5 +1,5 @@
 // Answers for the catalog queries psql 18 sends for \dt, \d <table> and \l.
-// The exact queries are in corpus/psql-meta.sql (captured with `psql -E`).
+// The handlers match the exact queries psql sends (see them with `psql -E`).
 // Everything is derived from sqlite_master and pragma_table_info().
 import { table, type Handler, type Session } from "./intercept";
 import { OID } from "../postgres/wire";
@@ -181,7 +181,7 @@ export const META_HANDLERS: Handler[] = [
   },
   {
     // Anything else aimed at the catalog returns no rows (policies, statistics, publications,
-    // inheritance for \d). Run with LOG_SQL to see these queries.
+    // inheritance for \d).
     name: "pg_catalog fallback",
     re: /\bpg_catalog\./,
     run: () => table([], [], "SELECT 0"),

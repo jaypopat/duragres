@@ -7,7 +7,9 @@
     "pg-gateway": "0.3.0-beta.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20261122.2",
+    "@cloudflare/config": "0.32.1",
+    "@types/bun": "^1.4.5",
+    "@types/pg": "^8.23.1",
     "pg": "8.23.1",
     "typescript": "7.0.2",
     "wrangler": "4.166.0"
@@ -16,9 +18,10 @@
     "examples/drizzle"
   ],
   "scripts": {
-    "dev": "wrangler dev --local",
-    "typecheck": "bun check",
-    "verify": "bun test/run.mjs",
-    "demo:fork": "bun examples/drizzle/fork.mjs"
+    "dev": "wrangler dev --experimental-new-config",
+    "deploy": "wrangler deploy --experimental-new-config",
+    "typecheck": "bun check && bun check -p test",
+    "test": "bun test --timeout 90000",
+    "demo:fork": "bun examples/drizzle/fork.ts"
   }
 }
