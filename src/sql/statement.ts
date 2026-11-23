@@ -12,7 +12,7 @@ import { QUERY_KINDS, isQuery } from "./catalog";
 import { findNodes, kindOf, parse, tokenize } from "./polyglot";
 import type { Expression, Token } from "./polyglot";
 import { answerCatalogQuery } from "./psql-meta";
-import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting } from "./session";
+import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting, isIsolation } from "./session";
 import type { Isolation, Session } from "./session";
 
 export type Statement =
@@ -72,6 +72,9 @@ function isolationLevel(tokens: Array<Token>): Isolation | undefined {
   return level;
 }
 
+/** SET TIME ZONE, NAMES and SCHEMA: the setting each one names, and how many tokens that takes. */
+const SET_SPECIAL_FORMS = new Map<string, [string, number]>([["TIME", ["timezone", 2]], ["NAMES", ["client_encoding", 1]], ["SCHEMA", ["search_path", 1]]]);
+
 /**
  * SET [SESSION | LOCAL] name {TO | =} value[, ...], plus the special forms TIME ZONE,
  * NAMES, SCHEMA, TRANSACTION and SESSION CHARACTERISTICS AS TRANSACTION.
@@ -89,8 +92,7 @@ function classifySet(tokens: Array<Token>): Statement {
     return { kind: "isolation", scope: word(0) === "TRANSACTION" ? "transaction" : "session", level, tag: "SET" };
   }
 
-  const special: Record<string, [string, number]> = { TIME: ["timezone", 2], NAMES: ["client_encoding", 1], SCHEMA: ["search_path", 1] };
-  let [name, skip] = special[word(0) ?? ""] ?? ["", 0];
+  let [name, skip] = SET_SPECIAL_FORMS.get(word(0) ?? "") ?? ["", 0];
   if (!name) {
     // A name is identifiers joined by dots (custom settings are "prefix.name").
     while (skip < tokens.length && !["TO", "="].includes(word(skip)!)) name += tokens[skip++].text.toLowerCase();
@@ -109,7 +111,8 @@ function classifySet(tokens: Array<Token>): Statement {
   checkSetting(name, items);
   if (name === "transaction_isolation" || name === "default_transaction_isolation") {
     const level = items.join(" ").toLowerCase();
-    return { kind: "isolation", scope: name === "transaction_isolation" ? "transaction" : "session", level: level === "default" ? undefined : (level as Isolation), tag: "SET" };
+    // checkSetting accepted it, so it is a level or DEFAULT.
+    return { kind: "isolation", scope: name === "transaction_isolation" ? "transaction" : "session", level: isIsolation(level) ? level : undefined, tag: "SET" };
   }
   return { kind: "noop", tag: "SET" };
 }
@@ -177,9 +180,9 @@ const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.re
 const FLAT_SCHEMAS = new Set(["public", "drizzle"]);
 
 /** Session functions SQLite lacks, and whether they are called with parentheses. */
-const SESSION_FUNCTIONS: Record<string, "call" | "bare" | "either"> = {
-  current_database: "call", version: "call", current_schema: "either", current_user: "bare", session_user: "bare", user: "bare",
-};
+const SESSION_FUNCTIONS = new Map<string, "call" | "bare" | "either">([
+  ["current_database", "call"], ["version", "call"], ["current_schema", "either"], ["current_user", "bare"], ["session_user", "bare"], ["user", "bare"],
+]);
 
 const isIdentifier = (t?: Token) => t?.type === "VAR" || t?.type === "QUOTED_IDENTIFIER";
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
@@ -228,7 +231,7 @@ function splitAndRewrite(query: string, s: Session): Array<Split> {
     if (words.length < 2) words.push(t.text.toUpperCase());
     // pg_catalog.current_database() and friends are session functions, rewritten below.
     const catalogName = tokens[i + 2]?.text.toLowerCase() ?? "";
-    if (isIdentifier(t) && t.text.toLowerCase() === "pg_catalog" && next?.type === "DOT" && !SESSION_FUNCTIONS[catalogName]) readsCatalog = true;
+    if (isIdentifier(t) && t.text.toLowerCase() === "pg_catalog" && next?.type === "DOT" && !SESSION_FUNCTIONS.has(catalogName)) readsCatalog = true;
 
     if (isIdentifier(t) && next?.type === "DOT" && prev?.type !== "DOT" && FLAT_SCHEMAS.has(t.text.toLowerCase())) {
       emit(t.start, "");
@@ -238,7 +241,7 @@ function splitAndRewrite(query: string, s: Session): Array<Split> {
     }
 
     const fn = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? "" : t.text.toLowerCase();
-    const style = SESSION_FUNCTIONS[fn];
+    const style = SESSION_FUNCTIONS.get(fn);
     const called = next?.type === "L_PAREN" && tokens[i + 2]?.type === "R_PAREN";
     // pg_catalog.current_database() is the same function; anything else qualified is not.
     const qualified = prev?.type === "DOT" && tokens[i - 2]?.text.toLowerCase() === "pg_catalog";

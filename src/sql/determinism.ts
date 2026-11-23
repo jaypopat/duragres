@@ -18,11 +18,11 @@ import type { Statement } from "./statement";
 type Sql = Extract<Statement, { kind: "sql" }>;
 
 const DATE_FUNCTIONS = new Set(["date", "time", "datetime", "julianday", "strftime", "unixepoch", "timediff"]);
-const CLOCK_KEYWORDS: Record<string, (iso: string) => string> = {
-  current_timestamp: (iso) => iso,
-  current_date: (iso) => iso.slice(0, 10),
-  current_time: (iso) => iso.slice(11, 19),
-};
+const CLOCK_KEYWORDS = new Map<string, (iso: string) => string>([
+  ["current_timestamp", (iso) => iso],
+  ["current_date", (iso) => iso.slice(0, 10)],
+  ["current_time", (iso) => iso.slice(11, 19)],
+]);
 
 /** "2026-11-23 10:00:00.123": the UTC text format Duragres stores timestamps in. */
 const sqliteTime = (clock: number) => new Date(clock).toISOString().replace("T", " ").slice(0, 23);
@@ -40,7 +40,7 @@ export function freezeClock(sqlite: string, clock: number): string {
     at = end;
   };
   tokens.forEach((t, i) => {
-    const keyword = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? undefined : CLOCK_KEYWORDS[t.text.toLowerCase()];
+    const keyword = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? undefined : CLOCK_KEYWORDS.get(t.text.toLowerCase());
     if (keyword && tokens[i + 1]?.type !== "L_PAREN") return replace(t.start, t.end, quote(keyword(iso)));
     if (t.type === "STRING" && t.text.toLowerCase() === "now" && DATE_FUNCTIONS.has(enclosingFunction(tokens, i))) {
       replace(t.start, t.end, quote(iso));
