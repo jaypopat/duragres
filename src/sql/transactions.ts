@@ -15,6 +15,7 @@
 // After an error the transaction is aborted (25P02) until ROLLBACK/COMMIT, like
 // Postgres; the protocol marks it failed when any statement errors.
 import { PgError, type Field, type Result } from "../postgres/wire";
+import { runDatabaseCommand } from "./databases";
 import { materializeInsert } from "./determinism";
 import { describe, run, type Params, type Runnable } from "./exec";
 import type { Session } from "./session";
@@ -61,6 +62,7 @@ function inSync<R>(s: Session, fn: () => R): R {
 
 export async function execute(stmt: Statement, params: Params, s: Session, oids: number[] = []): Promise<Result> {
   if (stmt.kind === "transaction") return control(stmt.op, s);
+  if (stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return runDatabaseCommand(stmt, s);
   const tx = s.tx;
   if (!tx) {
     if (!writes(stmt)) return run(stmt, params, s, oids);
@@ -92,7 +94,7 @@ function deterministic(stmt: Runnable, s: Session, clock: number): Runnable {
  * effects. Falls back to running it and rolling back when it can't be described statically.
  */
 export function describeStatement(stmt: Statement, params: Params, s: Session, oids: number[]): Field[] | null {
-  if (stmt.kind === "transaction") return null;
+  if (stmt.kind === "transaction" || stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return null;
   if (s.tx?.failed) throw aborted();
   const byRunning = () => {
     const result = run(stmt, params, s, oids);

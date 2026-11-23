@@ -2,10 +2,10 @@ import { DurableObject } from "cloudflare:workers";
 import { PostgresConnection } from "pg-gateway";
 import { initPolyglot } from "../sql/polyglot";
 import { WriterLock } from "../sql/lock";
-import { SERVER_VERSION, type Session } from "../sql/session";
+import { SERVER_VERSION, type Databases, type Session } from "../sql/session";
 import { Protocol } from "../postgres/protocol";
 import { closeQuietly, refuse } from "../postgres/socket";
-import { msg } from "../postgres/wire";
+import { msg, PgError } from "../postgres/wire";
 import { capture, restore, type Snapshot } from "./snapshot";
 import { createDatabase, createNotice, isLive, readMeta } from "./lifecycle";
 
@@ -16,14 +16,12 @@ const STARTUP_PARAMS: [string, string][] = [
   ["application_name", ""], ["IntervalStyle", "postgres"], ["is_superuser", "on"],
 ];
 
-const SNAPSHOT_LIMIT = 1024 * 1024;
-
 type Terminate = (code: string, message: string) => Promise<void>;
 
 /** One Postgres database. Its name is the Durable Object name. */
 export class PgDO extends DurableObject<Env> {
   private connections = new Set<Terminate>();
-  private expiring = false; // set while alarm() closes connections and deletes storage
+  private deleting = false; // set while destroy() closes connections and deletes storage
   private lock = new WriterLock();
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -40,7 +38,7 @@ export class PgDO extends DurableObject<Env> {
   /** One client connection. The gateway already answered SSLRequest and replays the StartupMessage. */
   async connect(socket: Socket): Promise<void> {
     const { ttlSeconds, idleSeconds, maxConnections } = this.env.LIMITS;
-    if (this.expiring) return refuse(socket, "57P03", "duragres: the database is being deleted, try again");
+    if (this.deleting) return refuse(socket, "57P03", "duragres: the database is being deleted, try again");
     if (this.connections.size >= maxConnections) return refuse(socket, "53300", "sorry, too many clients already");
 
     const name = this.name;
@@ -80,7 +78,7 @@ export class PgDO extends DurableObject<Env> {
           const user = state.clientParams!.user;
           for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
-          session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock };
+          session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock, databases: this.databases };
           protocol = new Protocol(session);
           touch();
         },
@@ -115,32 +113,47 @@ export class PgDO extends DurableObject<Env> {
       if (!meta.claimed) await this.ctx.storage.setAlarm(meta.expiresAt);
       return;
     }
-    this.expiring = true;
+    await this.destroy("57P01", `duragres: database "${meta.name}" expired and was deleted`);
+  }
+
+  /** Closes every connection and deletes all storage, refusing new connections meanwhile. */
+  private async destroy(code: string, message: string) {
+    this.deleting = true;
     try {
-      await Promise.all([...this.connections].map((terminate) => terminate("57P01", `duragres: database "${meta.name}" expired and was deleted`)));
+      await Promise.all([...this.connections].map((terminate) => terminate(code, message)));
       await this.ctx.storage.deleteAll();
     } finally {
-      this.expiring = false;
+      this.deleting = false;
     }
   }
 
-  /** Writes this database to R2 for a fork. Returns false if it does not exist. */
-  async saveSnapshot(key: string): Promise<boolean> {
-    const meta = readMeta(this.ctx.storage);
-    if (!meta || !isLive(meta)) return false;
-    const body = JSON.stringify(capture(this.ctx.storage));
-    if (new TextEncoder().encode(body).byteLength > SNAPSHOT_LIMIT) throw new Error("Snapshot exceeds the 1 MiB limit");
-    await this.env.SNAPSHOTS.put(key, body);
-    return true;
+  /** CREATE/DROP DATABASE run by a connection to this database, on another one. */
+  private databases: Databases = {
+    create: async (name, copy) => {
+      // Bounds how fast one database can spawn branches.
+      if (!(await this.env.CONNECT_LIMIT.limit({ key: `create:${this.name}` })).success) {
+        throw new PgError("53400", "duragres: too many new databases from this one, try again in a minute");
+      }
+      return this.env.PG.getByName(name).create(copy ? capture(this.ctx.storage) : null);
+    },
+    drop: (name, force) => this.env.PG.getByName(name).drop(force),
+  };
+
+  // --- RPC from other databases
+
+  /** Creates this database, empty or from another database's snapshot. */
+  async create(snapshot: Snapshot | null): Promise<"created" | "exists"> {
+    if (readMeta(this.ctx.storage)) return "exists";
+    if (snapshot) restore(this.ctx.storage, snapshot);
+    createDatabase(this.ctx.storage, this.name, this.env.LIMITS.ttlSeconds, !snapshot);
+    return "created";
   }
 
-  /** Creates this database from a snapshot in R2. */
-  async loadSnapshot(key: string): Promise<void> {
-    const object = await this.env.SNAPSHOTS.get(key);
-    if (!object) throw new Error("Snapshot is unavailable");
-    const snapshot = await object.json<Snapshot>();
-    if (readMeta(this.ctx.storage)) throw new Error("Fork destination already exists");
-    restore(this.ctx.storage, snapshot);
-    createDatabase(this.ctx.storage, this.name, this.env.LIMITS.ttlSeconds, false);
+  /** Deletes this database. It is in use while it has connections, unless `force` closes them. */
+  async drop(force: boolean): Promise<"dropped" | "missing" | "in-use"> {
+    if (!readMeta(this.ctx.storage)) return "missing";
+    if (this.connections.size && !force) return "in-use";
+    await this.destroy("57P01", "terminating connection due to administrator command");
+    return "dropped";
   }
 }

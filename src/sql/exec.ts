@@ -11,7 +11,8 @@ import type { Statement } from "./statement";
 import { translate } from "./translate";
 import { T, decodeParam, encodeValue, inferType, typeByOid } from "./types";
 
-export type Runnable = Exclude<Statement, { kind: "transaction" }>;
+/** Statements that run synchronously against this database. */
+export type Runnable = Exclude<Statement, { kind: "transaction" | "createDatabase" | "dropDatabase" }>;
 export type Params = (string | null)[];
 
 // SQLite error messages -> SQLSTATE. Anything unrecognised is an internal error, not a syntax error.
