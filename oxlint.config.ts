@@ -23,7 +23,5 @@ export default defineConfig({
     "unicorn/consistent-function-scoping": "off",
     "unicorn/text-encoding-identifier-case": "off",
   },
-  // The preset's TypeScript override turns this back on, so it is disabled after it.
-  overrides: [{ files: ["**/*.ts"], rules: { "typescript/only-throw-error": "off" } }],
   ignorePatterns: [...cloudflare.ignorePatterns, ".agents/**", ".claude/**", ".cloudflare/**", ".wrangler/**"],
 });
