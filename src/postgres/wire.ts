@@ -6,7 +6,7 @@ export const OID = { bool: 16, bytea: 17, int8: 20, int4: 23, text: 25, oid: 26,
 export interface Field { name: string; oid: number }
 
 export type Result =
-  | { kind: "rows"; fields: Array<Field>; rows: Array<string | null>[]; tag: string }
+  | { kind: "rows"; fields: Array<Field>; rows: Array<Array<string | null>>; tag: string }
   | { kind: "command"; tag: string }
   | { kind: "empty" };
 
@@ -77,7 +77,7 @@ export const msg = {
 };
 
 /** A result built in code rather than read from SQLite; values are sent as text. */
-export function rows(cols: Array<[string, number]>, values: Array<unknown>[], tag = `SELECT ${values.length}`): Extract<Result, { kind: "rows" }> {
+export function rows(cols: Array<[string, number]>, values: Array<Array<unknown>>, tag = `SELECT ${values.length}`): Extract<Result, { kind: "rows" }> {
   const fields: Array<Field> = cols.map(([name, oid]) => ({ name, oid }));
   return { kind: "rows", fields, rows: values.map((r) => r.map((v) => (v === null || v === undefined ? null : String(v)))), tag };
 }

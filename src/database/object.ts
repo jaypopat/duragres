@@ -2,11 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import { PostgresConnection } from "pg-gateway";
 import { initPolyglot } from "../sql/polyglot";
 import { WriterLock } from "../sql/lock";
-import { SERVER_VERSION, type Databases, type Session } from "../sql/session";
+import { SERVER_VERSION } from '../sql/session';
+import type { Databases, Session } from '../sql/session';
 import { Protocol } from "../postgres/protocol";
 import { closeQuietly, refuse } from "../postgres/socket";
 import { msg, PgError } from "../postgres/wire";
-import { capture, restore, type Snapshot } from "./snapshot";
+import { capture, restore } from './snapshot';
+import type { Snapshot } from './snapshot';
 import { createDatabase, createNotice, isLive, readMeta } from "./lifecycle";
 
 // ParameterStatus values psql/node-postgres look at, sent after AuthenticationOk.

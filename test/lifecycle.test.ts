@@ -2,7 +2,8 @@
 // against a Worker started with the short limits of `--env test` (cloudflare.config.ts).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import pg from "pg";
-import { startServer, type Server } from "./server";
+import { startServer } from './server';
+import type { Server } from './server';
 
 const TTL_SECONDS = 30;
 const IDLE_SECONDS = 6;

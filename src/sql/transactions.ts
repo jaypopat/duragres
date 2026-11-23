@@ -17,11 +17,14 @@
 //
 // After an error the transaction is aborted (25P02) until ROLLBACK/COMMIT, like
 // Postgres; the protocol marks it failed when any statement errors.
-import { PgError, type Field, type Result } from "../postgres/wire";
+import { PgError } from '../postgres/wire';
+import type { Field, Result } from '../postgres/wire';
 import { runDatabaseCommand } from "./databases";
 import { materializeInsert } from "./determinism";
-import { describe, run, type Params, type Runnable } from "./exec";
-import { lockedFromBegin, type Isolation, type Session } from "./session";
+import { describe, run } from './exec';
+import type { Params, Runnable } from './exec';
+import { lockedFromBegin } from './session';
+import type { Isolation, Session } from './session';
 import type { Statement } from "./statement";
 
 interface Write { stmt: Runnable; params: Params; oids: Array<number> }

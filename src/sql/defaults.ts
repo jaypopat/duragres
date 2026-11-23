@@ -2,7 +2,8 @@
 // ORMs (Drizzle) emit it for every column you didn't set. Rewrite on the AST:
 // drop DEFAULT columns, one INSERT per row when rows differ, DEFAULT VALUES when
 // a row is all defaults. RETURNING / ON CONFLICT are kept on every statement.
-import { generate, type Expression } from "./polyglot";
+import { generate } from './polyglot';
+import type { Expression } from './polyglot';
 
 const isDefault = (v: Expression) => "var" in v && v.var.this.toUpperCase() === "DEFAULT";
 

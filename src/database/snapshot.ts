@@ -1,6 +1,6 @@
 // A database's tables, rows and indexes, sent to another Durable Object over RPC
 // (structured clone, so BLOBs travel as ArrayBuffers).
-type Table = { name: string; ddl: string; columns: Array<string>; rows: Array<SqlStorageValue>[] };
+type Table = { name: string; ddl: string; columns: Array<string>; rows: Array<Array<SqlStorageValue>> };
 export type Snapshot = { tables: Array<Table>; indexes: Array<string>; sequences: Array<[string, number]> };
 
 const quote = (name: string) => '"' + name.replaceAll('"', '""') + '"';
