@@ -16,7 +16,6 @@ export default defineConfig({
     "quality/no-unsafe-dictionary-type": "off",
     "typescript/await-thenable": "off",
     "unicorn/catch-error-name": "off",
-    "unicorn/consistent-function-scoping": "off",
     "unicorn/text-encoding-identifier-case": "off",
   },
   ignorePatterns: [...cloudflare.ignorePatterns, ".agents/**", ".claude/**", ".cloudflare/**", ".wrangler/**"],

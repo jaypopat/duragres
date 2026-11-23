@@ -99,6 +99,8 @@ function foreignKeys(s: Session, r: Rel): Array<ForeignKey> {
   }));
 }
 
+const tf = (b: boolean) => (b ? "t" : "f");
+
 const HANDLERS: Array<Handler> = [
   {
     name: String.raw`\dt`,
@@ -157,7 +159,6 @@ const HANDLERS: Array<Handler> = [
     run: (m, s) => {
       const r = relByOid(m.input, s);
       const cols: Array<[string, number]> = ["relname", "indisprimary", "indisunique", "indisclustered", "indisvalid", "pg_get_indexdef", "pg_get_constraintdef", "contype", "condeferrable", "condeferred", "indisreplident", "reltablespace", "conperiod"].map((n) => [n, OID.text]);
-      const tf = (b: boolean) => (b ? "t" : "f");
       const rows = !r ? [] : indexes(s, r).map((ix) => {
         const constraint = ix.primary ? `PRIMARY KEY (${ix.cols.join(", ")})` : ix.name.endsWith("_key") ? `UNIQUE (${ix.cols.join(", ")})` : null;
         const def = `CREATE ${ix.unique ? "UNIQUE " : ""}INDEX ${ix.name} ON public.${r.name} USING btree (${ix.cols.join(", ")})`;

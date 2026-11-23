@@ -94,6 +94,8 @@ function targetOf(node: Expression): TableRef | undefined {
 const returningOf = (node: Expression): Array<Expression> | undefined =>
   "insert" in node ? node.insert.returning : "update" in node ? node.update.returning : "delete" in node ? node.delete.returning : undefined;
 
+const tableOf = (e: Expression | null) => (e && "table" in e ? e.table : undefined);
+
 /** Tables a statement reads, by name and alias, for expanding `*` and `t.*`. */
 function tablesInScope(node: Expression): Map<string, string> {
   const scope = new Map<string, string>();
@@ -102,7 +104,6 @@ function tablesInScope(node: Expression): Map<string, string> {
     scope.set(table.name.name, table.name.name);
     if (table.alias) scope.set(table.alias.name, table.name.name);
   };
-  const tableOf = (e: Expression | null) => (e && "table" in e ? e.table : undefined);
   if ("select" in node) {
     for (const from of node.select.from?.expressions ?? []) add(tableOf(from));
     for (const join of node.select.joins ?? []) add(tableOf(join.this));
