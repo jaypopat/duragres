@@ -1,39 +1,60 @@
 // A client query, split into statements and classified. Each statement is either
 // answered without storage, controls the transaction, or runs on SQLite.
 //
+// Utility statements (transaction control, SET, SHOW) are classified by their
+// leading keyword, since Polyglot doesn't parse every form of them; psql's catalog
+// queries are answered from their text; everything else is classified from its AST.
 // Rewrites are token edits on the original text, because Polyglot's PostgreSQL
-// generator is not lossless; the AST is used to classify.
+// generator is not lossless.
+import type { Result } from "../postgres/wire";
 import { findNodes, parse, tokenize, type Node, type Token } from "./polyglot";
+import { answerCatalogQuery } from "./psql-meta";
 import { SERVER_VERSION, type Session } from "./session";
 
 export type Statement =
   | { kind: "transaction"; op: "begin" | "commit" | "rollback" }
   | { kind: "show"; name: string }
-  | { kind: "noop"; tag: string } // SET, RESET, CREATE/DROP SCHEMA: SQLite has no settings or schemas
+  | { kind: "noop"; tag: string } // SET, RESET, DISCARD, CREATE/DROP SCHEMA: SQLite has no settings or schemas
+  | { kind: "catalog"; result: Result }
   | { kind: "addConstraint"; table: string; constraint: string }
   | { kind: "sql"; node: Node; pg: string; tag: string; dml: boolean; readOnly: boolean };
 
 export function prepare(query: string, s: Session): Statement[] {
-  // A comment-only statement parses to nothing.
-  return splitAndRewrite(query, s).flatMap((pg) => parse(pg).map((node) => classify(node, pg)));
+  return splitAndRewrite(query, s).flatMap(({ pg, words }): Statement[] => {
+    const utility = classifyUtility(words);
+    if (utility) return [utility];
+    const catalog = answerCatalogQuery(pg, s);
+    if (catalog) return [{ kind: "catalog", result: catalog }];
+    // A comment-only statement parses to nothing.
+    return parse(pg).map((node) => classify(node, pg));
+  });
+}
+
+/** Classifies a statement by its first two keywords, upper-cased. */
+function classifyUtility([first, second = ""]: string[]): Statement | undefined {
+  switch (first) {
+    case "BEGIN":
+    case "START":
+      return { kind: "transaction", op: "begin" };
+    case "COMMIT":
+    case "END":
+      return { kind: "transaction", op: "commit" };
+    case "ROLLBACK":
+    case "ABORT":
+      return { kind: "transaction", op: "rollback" };
+    case "SHOW":
+      return { kind: "show", name: second.toLowerCase() };
+    case "SET":
+    case "RESET":
+      return { kind: "noop", tag: first };
+    case "DISCARD":
+      return { kind: "noop", tag: `DISCARD ${second}` };
+  }
 }
 
 function classify(node: Node, pg: string): Statement {
   const kind = Object.keys(node)[0];
   switch (kind) {
-    case "transaction":
-      return { kind: "transaction", op: "begin" };
-    case "commit":
-      return { kind: "transaction", op: "commit" };
-    case "rollback":
-      return { kind: "transaction", op: "rollback" };
-    case "show":
-      return { kind: "show", name: String(node.show.this).toLowerCase() };
-    case "set_statement":
-      return { kind: "noop", tag: "SET" };
-    case "command":
-      if (/^reset\b/i.test(node.command.this)) return { kind: "noop", tag: "RESET" };
-      break;
     case "create_schema":
     case "drop_schema":
       return { kind: "noop", tag: commandTag(kind) };
@@ -48,12 +69,14 @@ function classify(node: Node, pg: string): Statement {
   }
   const dml = kind === "insert" || kind === "update" || kind === "delete";
   const writes = findNodes(node, (n) => n?.insert || n?.update || n?.delete);
-  const readOnly = (kind === "select" || kind === "values") && !writes.length;
+  const readOnly = QUERIES.has(kind) && !writes.length;
   return { kind: "sql", node, pg, tag: commandTag(kind), dml, readOnly };
 }
 
-/** "create_table" -> "CREATE TABLE"; queries report SELECT. */
-const commandTag = (kind: string) => (kind === "values" ? "SELECT" : kind.replace(/_/g, " ").toUpperCase());
+const QUERIES = new Set(["select", "values", "union", "intersect", "except"]);
+
+/** "create_table" -> "CREATE TABLE"; every query reports SELECT. */
+const commandTag = (kind: string) => (QUERIES.has(kind) ? "SELECT" : kind.replace(/_/g, " ").toUpperCase());
 
 // --- Splitting and rewriting
 
@@ -62,7 +85,7 @@ const FLAT_SCHEMAS = new Set(["public", "drizzle"]);
 
 /** Session functions SQLite lacks, and whether they are called with parentheses. */
 const SESSION_FUNCTIONS: Record<string, "call" | "bare" | "either"> = {
-  current_database: "call", version: "call", current_schema: "either", current_user: "bare", session_user: "bare",
+  current_database: "call", version: "call", current_schema: "either", current_user: "bare", session_user: "bare", user: "bare",
 };
 
 const isIdentifier = (t?: Token) => t?.type === "VAR" || t?.type === "QUOTED_IDENTIFIER";
@@ -75,14 +98,25 @@ function sessionValue(fn: string, s: Session): string {
   return s.user;
 }
 
-/** Non-empty statements of `query`, with flattened schemas dropped and session functions replaced by their values. */
-function splitAndRewrite(query: string, s: Session): string[] {
+interface Split { pg: string; words: string[] }
+
+/**
+ * Non-empty statements of `query` with their first two keywords, flattened schema
+ * qualifiers dropped and session functions replaced by their values.
+ */
+function splitAndRewrite(query: string, s: Session): Split[] {
   const tokens = tokenize(query);
-  const statements: string[] = [];
+  const statements: Split[] = [];
   let text = "";
-  let at = tokens[0]?.start ?? 0; // copy query[at, token.start) verbatim before each edit
+  let words: string[] = [];
+  let at = tokens[0]?.start ?? 0; // query[at, edit) is copied verbatim before each edit
   const emit = (end: number, replacement: string) => {
     text += query.slice(at, end) + replacement;
+  };
+  const finish = () => {
+    if (text.trim()) statements.push({ pg: text.trim(), words });
+    text = "";
+    words = [];
   };
 
   for (let i = 0; i < tokens.length; i++) {
@@ -92,11 +126,11 @@ function splitAndRewrite(query: string, s: Session): string[] {
 
     if (t.type === "SEMICOLON") {
       emit(t.start, "");
-      if (text.trim()) statements.push(text.trim());
-      text = "";
+      finish();
       at = t.end;
       continue;
     }
+    if (words.length < 2) words.push(t.text.toUpperCase());
 
     if (isIdentifier(t) && next?.type === "DOT" && prev?.type !== "DOT" && FLAT_SCHEMAS.has(t.text.toLowerCase())) {
       emit(t.start, "");
@@ -105,20 +139,24 @@ function splitAndRewrite(query: string, s: Session): string[] {
       continue;
     }
 
-    const fn = t.type === "VAR" ? t.text.toLowerCase() : "";
+    const fn = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? "" : t.text.toLowerCase();
     const style = SESSION_FUNCTIONS[fn];
     const called = next?.type === "L_PAREN" && tokens[i + 2]?.type === "R_PAREN";
-    if (style && prev?.type !== "DOT" && (style === "either" || (style === "call") === called)) {
+    // pg_catalog.current_database() is the same function; anything else qualified is not.
+    const qualified = prev?.type === "DOT" && tokens[i - 2]?.text.toLowerCase() === "pg_catalog";
+    if (style && (prev?.type !== "DOT" || qualified) && (style === "either" || (style === "call") === called)) {
+      const first = qualified ? i - 2 : i;
       const last = called ? i + 2 : i;
+      const before = tokens[first - 1];
       const after = tokens[last + 1];
       // A bare select-list item keeps Postgres' column name, which is the function name.
-      const item = (prev?.type === "SELECT" || prev?.type === "COMMA") && (!after || ["COMMA", "FROM", "SEMICOLON"].includes(after.type));
-      emit(t.start, quote(sessionValue(fn, s)) + (item ? ` AS ${fn}` : ""));
+      const item = (before?.type === "SELECT" || before?.type === "COMMA") && (!after || ["COMMA", "FROM", "SEMICOLON"].includes(after.type));
+      emit(tokens[first].start, quote(sessionValue(fn, s)) + (item ? ` AS ${fn}` : ""));
       at = tokens[last].end;
       i = last;
     }
   }
   emit(query.length, "");
-  if (text.trim()) statements.push(text.trim());
+  finish();
   return statements;
 }

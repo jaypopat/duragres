@@ -31,6 +31,8 @@ export function run(stmt: Runnable, params: Params, s: Session, paramOids: numbe
         return show(stmt.name);
       case "noop":
         return { kind: "command", tag: stmt.tag };
+      case "catalog":
+        return stmt.result;
       case "addConstraint":
         addConstraint(stmt.table, stmt.constraint, s);
         return { kind: "command", tag: "ALTER TABLE" };

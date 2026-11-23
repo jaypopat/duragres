@@ -106,3 +106,35 @@ test("a simple query can hold several statements, comments, or nothing", async (
     await c.end();
   }
 });
+
+test("utility statements Polyglot can't parse are still classified by keyword", async () => {
+  const c = await client(freshDb("utility"));
+  try {
+    for (const q of ["SET TIME ZONE 'UTC'", "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE", "RESET ALL"]) {
+      await c.query(q);
+    }
+    expect((await c.query("DISCARD ALL")).command).toBe("DISCARD");
+    await c.query("CREATE TABLE t (v INT)");
+    await c.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
+    await c.query("INSERT INTO t VALUES (1)");
+    await c.query("ABORT");
+    expect((await c.query("SELECT COUNT(*) AS n FROM t")).rows).toEqual([{ n: "0" }]);
+  } finally {
+    await c.end();
+  }
+});
+
+test("set operations report SELECT, and pg_catalog-qualified session functions work", async () => {
+  const name = freshDb("setops");
+  const c = await client(name);
+  try {
+    const union = await c.query("SELECT 1 AS n UNION SELECT 2 ORDER BY n");
+    expect([union.command, union.rowCount]).toEqual(["SELECT", 2]);
+    expect((await c.query("SELECT pg_catalog.current_database(), user")).rows).toEqual([{ current_database: name, user: "demo" }]);
+    const results = await c.query("CREATE TABLE a (id INT); SELECT 'pg_catalog.x' AS s") as unknown as { command: string }[];
+    expect(results.map((r) => r.command)).toEqual(["CREATE", "SELECT"]);
+    expect((await c.query("SELECT COUNT(*) AS n FROM a")).rows).toEqual([{ n: "0" }]);
+  } finally {
+    await c.end();
+  }
+});

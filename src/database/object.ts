@@ -23,6 +23,7 @@ type Terminate = (code: string, message: string) => Promise<void>;
 /** One Postgres database. Its name is the Durable Object name. */
 export class PgDO extends DurableObject<Env> {
   private connections = new Set<Terminate>();
+  private expiring = false; // set while alarm() closes connections and deletes storage
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -38,6 +39,7 @@ export class PgDO extends DurableObject<Env> {
   /** One client connection. The gateway already answered SSLRequest and replays the StartupMessage. */
   async connect(socket: Socket): Promise<void> {
     const { ttlSeconds, idleSeconds, maxConnections } = this.env.LIMITS;
+    if (this.expiring) return refuse(socket, "57P03", "duragres: the database is being deleted, try again");
     if (this.connections.size >= maxConnections) return refuse(socket, "53300", "sorry, too many clients already");
 
     const name = this.name;
@@ -108,8 +110,13 @@ export class PgDO extends DurableObject<Env> {
       if (!meta.claimed) await this.ctx.storage.setAlarm(meta.expiresAt);
       return;
     }
-    await Promise.all([...this.connections].map((terminate) => terminate("57P01", `duragres: database "${meta.name}" expired and was deleted`)));
-    await this.ctx.storage.deleteAll();
+    this.expiring = true;
+    try {
+      await Promise.all([...this.connections].map((terminate) => terminate("57P01", `duragres: database "${meta.name}" expired and was deleted`)));
+      await this.ctx.storage.deleteAll();
+    } finally {
+      this.expiring = false;
+    }
   }
 
   /** Writes this database to R2 for a fork. Returns false if it does not exist. */
