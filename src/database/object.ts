@@ -13,7 +13,6 @@ const STARTUP_PARAMS: [string, string][] = [
   ["server_encoding", "UTF8"], ["client_encoding", "UTF8"], ["DateStyle", "ISO, MDY"],
   ["integer_datetimes", "on"], ["standard_conforming_strings", "on"], ["TimeZone", "UTC"],
   ["application_name", ""], ["IntervalStyle", "postgres"], ["is_superuser", "on"],
-  ["session_authorization", "demo"],
 ];
 
 const SNAPSHOT_LIMIT = 1024 * 1024;
@@ -75,9 +74,10 @@ export class PgDO extends DurableObject<Env> {
         auth: { method: "trust" },
         onAuthenticated: async (state) => {
           const writer = conn.streamWriter!;
-          for (const [k, v] of STARTUP_PARAMS) await writer.write(msg.parameterStatus(k, v));
+          const user = state.clientParams!.user;
+          for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
-          const session: Session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user: state.clientParams!.user };
+          const session: Session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user };
           protocol = new Protocol(session);
           touch();
         },

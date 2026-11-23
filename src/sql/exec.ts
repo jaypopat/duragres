@@ -2,26 +2,37 @@
 // DDL and its shadow-catalog update commit together in one transactionSync.
 import { PgError, type Field, type Result } from "../postgres/wire";
 import { annotate } from "./polyglot";
-import { applyChanges, changesOf, loadCatalog, outputTypes, paramTypes, schemaOf } from "./catalog";
+import { applyChanges, changesOf, loadCatalog, outputColumns, paramTypes, returnsRows, schemaOf, type OutputColumn } from "./catalog";
 import { expandDefaults } from "./defaults";
 import { addConstraint } from "./rebuild";
 import { show, type Session } from "./session";
 import type { Statement } from "./statement";
 import { translate } from "./translate";
-import { decodeParam, encodeValue, inferType, typeByOid, type PgType } from "./types";
+import { T, decodeParam, encodeValue, inferType, typeByOid } from "./types";
 
 export type Runnable = Exclude<Statement, { kind: "transaction" }>;
 export type Params = (string | null)[];
 
+// SQLite error messages -> SQLSTATE. Anything unrecognised is an internal error, not a syntax error.
+const SQLITE_ERRORS: [RegExp, string, string][] = [
+  [/UNIQUE constraint failed/, "23505", "duplicate key value violates unique constraint"],
+  [/NOT NULL constraint failed/, "23502", "null value violates not-null constraint"],
+  [/FOREIGN KEY constraint failed/, "23503", "violates foreign key constraint"],
+  [/CHECK constraint failed/, "23514", "violates check constraint"],
+  [/no such table/, "42P01", "relation does not exist"],
+  [/no such column/, "42703", "column does not exist"],
+  [/no such function/, "42883", "function does not exist"],
+  [/already exists/, "42P07", "relation already exists"],
+  [/syntax error|incomplete input|unrecognized token/, "42601", "syntax error"],
+  [/datatype mismatch/, "42804", "datatype mismatch"],
+  [/too many SQL variables|wrong number of arguments/, "42601", "wrong number of parameters"],
+];
+
 export function sqliteErrorToPg(e: unknown): PgError {
   if (e instanceof PgError) return e;
   const m = String((e as Error)?.message ?? e).replace(/: SQLITE_\w+.*$/, "");
-  if (/UNIQUE constraint failed/.test(m)) return new PgError("23505", `duplicate key value violates unique constraint (${m})`);
-  if (/NOT NULL constraint failed/.test(m)) return new PgError("23502", `null value violates not-null constraint (${m})`);
-  if (/FOREIGN KEY constraint failed/.test(m)) return new PgError("23503", `violates foreign key constraint (${m})`);
-  if (/no such table/.test(m)) return new PgError("42P01", `relation does not exist (${m})`);
-  if (/no such column/.test(m)) return new PgError("42703", m);
-  return new PgError("42601", m);
+  const hit = SQLITE_ERRORS.find(([re]) => re.test(m));
+  return hit ? new PgError(hit[1], `${hit[2]} (${m})`) : new PgError("XX000", m);
 }
 
 export function run(stmt: Runnable, params: Params, s: Session, paramOids: number[] = []): Result {
@@ -91,18 +102,38 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
     : stmt.tag === "SELECT" ? `SELECT ${res.rows.length}`
     : stmt.tag;
   if (!res.names.length) return { kind: "command", tag };
-  return rowsResult(res.names, res.rows, tag, outputTypes(typed, catalog, res.names.length));
+  const known = outputColumns(typed, catalog);
+  const columns = known?.length === res.names.length ? known : res.names.map((name) => ({ name }));
+  return rowsResult(columns, res.rows, tag);
 }
 
-/** PostgreSQL names an unaliased `COUNT(*)` column `count`; SQLite names it `COUNT(*)`. */
-function pgColumnName(name: string): string {
-  const m = /^(\w+)\(.*\)$/s.exec(name);
-  return m ? m[1].toLowerCase() : name;
-}
-
-/** Result columns typed from the catalog where known, otherwise from their values. */
-function rowsResult(names: string[], raw: unknown[][], tag: string, known?: (PgType | undefined)[]): Result {
-  const types = names.map((_, i) => known?.[i] ?? inferType(raw.find((r) => r[i] !== null && r[i] !== undefined)?.[i] ?? null));
-  const fields: Field[] = names.map((name, i) => ({ name: pgColumnName(name), oid: types[i].oid }));
+/** Result columns named and typed as Postgres would where known; other types are inferred from the values. */
+function rowsResult(columns: OutputColumn[], raw: unknown[][], tag: string): Result {
+  const types = columns.map((c, i) => c.type ?? inferType(raw.find((r) => r[i] !== null && r[i] !== undefined)?.[i] ?? null));
+  const fields: Field[] = columns.map((c, i) => ({ name: c.name, oid: types[i].oid }));
   return { kind: "rows", fields, rows: raw.map((r) => r.map((v, i) => encodeValue(v, types[i]))), tag };
+}
+
+/**
+ * The RowDescription fields of a statement, without running anything that writes:
+ * null when it returns no rows, undefined when they can only be learnt by running it.
+ * A column whose type is unknown is described as text.
+ */
+export function describe(stmt: Runnable, s: Session): Field[] | null | undefined {
+  switch (stmt.kind) {
+    case "show":
+    case "catalog": {
+      const r = run(stmt, [], s);
+      return r.kind === "rows" ? r.fields : null;
+    }
+    case "noop":
+    case "addConstraint":
+      return null;
+    case "sql": {
+      if (!returnsRows(stmt.node)) return null;
+      const catalog = loadCatalog(s.sql);
+      const [typed] = annotate(stmt.pg, schemaOf(catalog));
+      return outputColumns(typed, catalog)?.map((c) => ({ name: c.name, oid: (c.type ?? T.text).oid }));
+    }
+  }
 }

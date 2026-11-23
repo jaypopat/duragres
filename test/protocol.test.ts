@@ -1,6 +1,7 @@
 // Simple and extended query protocol behaviour, as node-postgres sees it.
 import { expect, test } from "bun:test";
-import { client, freshDb } from "./setup";
+import { client, databaseUrl, freshDb, queryAll } from "./setup";
+import { frontend, open, types } from "./wire";
 
 test("the SQL corpus runs over the simple query protocol", async () => {
   const sql = (await Bun.file("test/fixtures/demo.sql").text()).replace(/^--.*$/gm, "");
@@ -98,7 +99,7 @@ test("session functions, SHOW and SET are answered without SQLite support", asyn
 test("a simple query can hold several statements, comments, or nothing", async () => {
   const c = await client(freshDb("multi"));
   try {
-    const results = await c.query("CREATE TABLE a (x INT); -- make it\nINSERT INTO a VALUES (1), (2); SELECT x FROM public.a ORDER BY x;") as unknown as { command: string; rows: unknown[] }[];
+    const results = await queryAll(c, "CREATE TABLE a (x INT); -- make it\nINSERT INTO a VALUES (1), (2); SELECT x FROM public.a ORDER BY x;");
     expect(results.map((r) => r.command)).toEqual(["CREATE", "INSERT", "SELECT"]);
     expect(results[2].rows).toEqual([{ x: 1 }, { x: 2 }]);
     for (const empty of ["", ";", "-- nothing here"]) expect((await c.query(empty)).rows).toEqual([]);
@@ -131,9 +132,43 @@ test("set operations report SELECT, and pg_catalog-qualified session functions w
     const union = await c.query("SELECT 1 AS n UNION SELECT 2 ORDER BY n");
     expect([union.command, union.rowCount]).toEqual(["SELECT", 2]);
     expect((await c.query("SELECT pg_catalog.current_database(), user")).rows).toEqual([{ current_database: name, user: "demo" }]);
-    const results = await c.query("CREATE TABLE a (id INT); SELECT 'pg_catalog.x' AS s") as unknown as { command: string }[];
+    const results = await queryAll(c, "CREATE TABLE a (id INT); SELECT 'pg_catalog.x' AS s");
     expect(results.map((r) => r.command)).toEqual(["CREATE", "SELECT"]);
     expect((await c.query("SELECT COUNT(*) AS n FROM a")).rows).toEqual([{ n: "0" }]);
+  } finally {
+    await c.end();
+  }
+});
+
+test("Describe has no side effects, and Execute honours its row limit", async () => {
+  const name = freshDb("wire");
+  const c = await client(name);
+  const { hostname, port } = new URL(databaseUrl(name));
+  const raw = await open(hostname, Number(port), name);
+  try {
+    await c.query("CREATE TABLE t (id SERIAL PRIMARY KEY, v TEXT)");
+
+    // Parse + Describe of an INSERT ... RETURNING describes the columns without inserting.
+    const described = await raw.send(frontend.parse("INSERT INTO t (v) VALUES ($1) RETURNING id, v"), frontend.describeStatement(), frontend.sync());
+    expect(types(described)).toBe("1 t T");
+    expect((await c.query("SELECT COUNT(*) AS n FROM t")).rows).toEqual([{ n: "0" }]);
+
+    await c.query("INSERT INTO t (v) VALUES ('a'), ('b'), ('c')");
+    const paged = await raw.send(frontend.parse("SELECT v FROM t ORDER BY id"), frontend.bind(), frontend.describePortal(),
+      frontend.execute(2), frontend.execute(2), frontend.sync());
+    expect(types(paged)).toBe("1 2 T D D s D C");
+  } finally {
+    raw.close();
+    await c.end();
+  }
+});
+
+test("syntax errors surface at Parse, and unsupported catalog queries fail with 0A000", async () => {
+  const c = await client(freshDb("errors"));
+  try {
+    await expect(c.query("SELEC 1")).rejects.toMatchObject({ code: "42601" });
+    await expect(c.query("SELECT typname FROM pg_catalog.pg_type")).rejects.toMatchObject({ code: "0A000" });
+    expect((await c.query("SELECT 'pg_catalog.pg_type' AS s")).rows).toEqual([{ s: "pg_catalog.pg_type" }]);
   } finally {
     await c.end();
   }

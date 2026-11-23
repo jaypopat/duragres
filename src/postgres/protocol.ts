@@ -1,36 +1,32 @@
 // Post-authentication message handling: the simple query protocol (Q) and the
 // extended protocol (Parse/Bind/Describe/Execute/Sync) that drivers use for $n parameters.
 import { sqliteErrorToPg, type Params } from "../sql/exec";
-import { findNodes, parse } from "../sql/polyglot";
+import { findNodes } from "../sql/polyglot";
 import type { Session } from "../sql/session";
-import { prepare } from "../sql/statement";
-import { execute, txStatus } from "../sql/transactions";
-import { OID, PgError, Reader, decodeText, encodeResult, msg, type Result } from "./wire";
+import { prepare, type Statement } from "../sql/statement";
+import { describeStatement, execute, txStatus } from "../sql/transactions";
+import { OID, PgError, Reader, decodeText, encodeResult, msg, type Field, type Result } from "./wire";
 
 // pg-gateway treats an empty iterable as "not handled" and falls back to its own
 // handler, so "reply with nothing" must be one zero-length chunk.
 const NOTHING = [new Uint8Array(0)];
 
-// A portal runs at most once: Describe runs it and caches the result, Execute
-// returns the cache. A repeated Execute on a finished portal returns no rows.
-interface Portal { sql: string; params: Params; oids: number[]; result?: Result; done?: boolean }
+interface Prepared { stmt?: Statement; oids: number[] } // no stmt: an empty query
 
-function zeroTag(r?: Result): string {
-  const tag = r && r.kind !== "empty" ? r.tag : "SELECT 0";
-  return tag.replace(/\d+$/, "0");
-}
+// A portal runs once, at its first Execute. Later Executes page through the rows
+// when the client asked for a row limit, then report zero rows.
+interface Portal extends Prepared { params: Params; result?: Result; sent: number; done: boolean }
 
-/** The number of $n parameters a statement takes. Unparseable SQL fails later, at Execute. */
-function parameterCount(sql: string): number {
-  try {
-    return Math.max(0, ...parse(sql).flatMap((node) => findNodes(node, (n) => n?.parameter).map((n) => n.parameter.index)));
-  } catch {
-    return 0;
-  }
+const zeroTag = (r: Result) => (r.kind === "empty" ? "SELECT 0" : r.tag.replace(/\d+$/, "0"));
+
+/** The number of $n parameters a statement takes. */
+function parameterCount(stmt?: Statement): number {
+  if (stmt?.kind !== "sql") return 0;
+  return Math.max(0, ...findNodes(stmt.node, (n) => n?.parameter).map((n) => n.parameter.index));
 }
 
 export class Protocol {
-  private statements = new Map<string, { sql: string; oids: number[] }>();
+  private statements = new Map<string, Prepared>();
   private portals = new Map<string, Portal>();
   private failed = false; // after an extended-protocol error, discard until Sync
 
@@ -53,6 +49,16 @@ export class Protocol {
       this.failed = true;
       return [this.error(e)];
     }
+  }
+
+  private portal(name: string): Portal {
+    const p = this.portals.get(name);
+    if (!p) throw new PgError("34000", `portal "${name}" does not exist`);
+    return p;
+  }
+
+  private rowDescription(fields: Field[] | null | undefined) {
+    return fields ? msg.rowDescription(fields) : msg.noData();
   }
 
   private ready() {
@@ -78,54 +84,63 @@ export class Protocol {
     return out;
   }
 
-  /** One extended-protocol statement. */
-  private run(p: Portal): Result {
-    const statements = prepare(p.sql, this.s);
-    if (statements.length > 1) throw new PgError("42601", "cannot insert multiple commands into a prepared statement");
-    return statements.length ? execute(statements[0], p.params, this.s, p.oids) : { kind: "empty" };
-  }
-
   private extended(r: Reader): Uint8Array[] {
     switch (r.type) {
       case "P": {
         const name = r.cstr();
-        const sql = r.cstr();
+        const statements = prepare(r.cstr(), this.s);
+        if (statements.length > 1) throw new PgError("42601", "cannot insert multiple commands into a prepared statement");
         const oids = Array.from({ length: r.int16() }, () => r.int32());
-        this.statements.set(name, { sql, oids });
+        this.statements.set(name, { stmt: statements[0], oids });
         return [msg.parseComplete()];
       }
       case "B": {
         const portal = r.cstr();
-        const { sql, oids } = this.statements.get(r.cstr()) ?? { sql: "", oids: [] };
+        const name = r.cstr();
+        const prepared = this.statements.get(name);
+        if (!prepared) throw new PgError("26000", `prepared statement "${name}" does not exist`);
         const formats = r.int16();
-        for (let i = 0; i < formats; i++) r.int16(); // text format assumed
+        for (let i = 0; i < formats; i++) {
+          if (r.int16() !== 0) throw new PgError("0A000", "duragres supports only text-format parameters");
+        }
         const params: Params = [];
         const n = r.int16();
         for (let i = 0; i < n; i++) {
           const length = r.int32();
           params.push(length < 0 ? null : decodeText(r.bytes(length)));
         }
-        this.portals.set(portal, { sql, params, oids });
+        this.portals.set(portal, { ...prepared, params, sent: 0, done: false });
         return [msg.bindComplete()];
       }
       case "D": {
         const kind = String.fromCharCode(r.byte());
         const name = r.cstr();
         if (kind === "S") {
-          const n = parameterCount(this.statements.get(name)?.sql ?? "");
-          return [msg.parameterDescription(Array(n).fill(OID.text)), msg.noData()];
+          const prepared = this.statements.get(name);
+          if (!prepared) throw new PgError("26000", `prepared statement "${name}" does not exist`);
+          const n = parameterCount(prepared.stmt);
+          const params = Array<null>(n).fill(null);
+          return [msg.parameterDescription(Array(n).fill(OID.text)), this.rowDescription(prepared.stmt && describeStatement(prepared.stmt, params, this.s, prepared.oids))];
         }
-        // Portal: run now to describe the real columns; Execute returns the cached result.
-        const p = this.portals.get(name)!;
-        p.result ??= this.run(p);
-        return [p.result.kind === "rows" ? msg.rowDescription(p.result.fields) : msg.noData()];
+        const p = this.portal(name);
+        return [this.rowDescription(p.result?.kind === "rows" ? p.result.fields : p.stmt && describeStatement(p.stmt, p.params, this.s, p.oids))];
       }
       case "E": {
-        const p = this.portals.get(r.cstr())!;
-        if (p.done) return [msg.commandComplete(zeroTag(p.result))];
-        p.result ??= this.run(p);
-        p.done = true;
-        return encodeResult(p.result, false);
+        const p = this.portal(r.cstr());
+        const maxRows = r.int32();
+        if (!p.stmt) return [msg.emptyQuery()];
+        if (p.done) return [msg.commandComplete(zeroTag(p.result!))];
+        p.result ??= execute(p.stmt, p.params, this.s, p.oids);
+        if (p.result.kind !== "rows") {
+          p.done = true;
+          return encodeResult(p.result, false);
+        }
+        const rows = p.result.rows.slice(p.sent, maxRows > 0 ? p.sent + maxRows : undefined);
+        p.sent += rows.length;
+        const out = rows.map((row) => msg.dataRow(row));
+        p.done = p.sent === p.result.rows.length;
+        out.push(p.done ? msg.commandComplete(p.result.tag.replace(/\d+$/, String(rows.length))) : msg.portalSuspended());
+        return out;
       }
       case "C": {
         const kind = String.fromCharCode(r.byte());
