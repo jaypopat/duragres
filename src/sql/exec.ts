@@ -4,6 +4,7 @@ import { PgError, type Field, type Result } from "../postgres/wire";
 import { annotate } from "./polyglot";
 import { applyChanges, changesOf, loadCatalog, outputColumns, paramTypes, returnsRows, schemaOf, type OutputColumn } from "./catalog";
 import { expandDefaults } from "./defaults";
+import { freezeClock, usesRandomness } from "./determinism";
 import { addConstraint } from "./rebuild";
 import { show, type Session } from "./session";
 import type { Statement } from "./statement";
@@ -66,7 +67,14 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
   const [typed] = annotate(stmt.pg, schemaOf(catalog));
   const inferred = paramTypes(typed, catalog);
   const params = rawParams.map((v, i) => decodeParam(v, typeByOid(paramOids[i] ?? 0) ?? inferred.get(i + 1)));
-  const sqlite = (expandDefaults(stmt.node) ?? [stmt.pg]).flatMap(translate).map(numberParams);
+  let sqlite = (expandDefaults(stmt.node) ?? [stmt.pg]).flatMap(translate).map(numberParams);
+  if (stmt.clock !== undefined && !stmt.ddl) {
+    // DDL keeps 'now' in its defaults: they are evaluated when rows are inserted.
+    sqlite = sqlite.map((q) => freezeClock(q, stmt.clock!));
+    if (!stmt.readOnly && sqlite.some(usesRandomness)) {
+      throw new PgError("0A000", "duragres cannot keep a random value consistent inside a transaction; generate it in the client or in INSERT ... VALUES");
+    }
+  }
 
   // A translation can be several SQLite statements; rows from all of them form the result.
   const execute = () => {

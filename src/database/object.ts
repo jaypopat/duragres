@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { PostgresConnection } from "pg-gateway";
 import { initPolyglot } from "../sql/polyglot";
+import { WriterLock } from "../sql/lock";
 import { SERVER_VERSION, type Session } from "../sql/session";
 import { Protocol } from "../postgres/protocol";
 import { closeQuietly, refuse } from "../postgres/socket";
@@ -23,6 +24,7 @@ type Terminate = (code: string, message: string) => Promise<void>;
 export class PgDO extends DurableObject<Env> {
   private connections = new Set<Terminate>();
   private expiring = false; // set while alarm() closes connections and deletes storage
+  private lock = new WriterLock();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -46,6 +48,7 @@ export class PgDO extends DurableObject<Env> {
     const created = !existing;
     if (created) createDatabase(this.ctx.storage, name, ttlSeconds);
 
+    let session: Session | undefined;
     let protocol: Protocol | undefined;
     let idle: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
@@ -77,7 +80,7 @@ export class PgDO extends DurableObject<Env> {
           const user = state.clientParams!.user;
           for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
-          const session: Session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user };
+          session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock };
           protocol = new Protocol(session);
           touch();
         },
@@ -99,6 +102,8 @@ export class PgDO extends DurableObject<Env> {
       closed = true;
       clearTimeout(idle);
       this.connections.delete(terminate);
+      // A connection that goes away mid-transaction rolls it back, which frees the lock.
+      if (session) this.lock.release(session);
     }
   }
 

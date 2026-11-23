@@ -1,23 +1,27 @@
-// BEGIN/COMMIT/ROLLBACK on top of DO SQLite, which only offers synchronous
-// transactionSync() and rejects BEGIN in exec().
+// BEGIN/COMMIT/ROLLBACK on top of DO SQLite, which rejects BEGIN and SAVEPOINT in
+// exec() and freezes the object while an async storage.transaction() is open, so no
+// SQLite transaction can stay open while the client thinks between statements.
 //
-// Inside a transaction, every statement runs as: transactionSync(replay the
-// transaction's earlier writes; run this statement; throw to roll back). The
-// client sees its own writes, nothing is committed. COMMIT replays the log for
-// real in one transactionSync; ROLLBACK discards it. After an error the
-// transaction is aborted (25P02) until ROLLBACK/COMMIT, like Postgres; the
-// protocol marks it failed when any statement errors.
+// Instead, each statement in a transaction runs inside transactionSync(replay the
+// transaction's earlier writes; run this statement; roll back). The client sees its
+// own writes and nothing is committed. COMMIT replays the log for real in one
+// transactionSync; ROLLBACK discards it.
 //
-// Known difference: non-deterministic values (gen_random_uuid(), now()) seen
-// during the transaction can differ from the committed ones, because COMMIT
-// re-executes the statements.
+// The replay reproduces exactly what the client saw because:
+// - from its first write to COMMIT, the transaction holds the database's WriterLock,
+//   so no other connection changes the committed state it replays on;
+// - each write is made deterministic before it is logged (determinism.ts).
+//
+// After an error the transaction is aborted (25P02) until ROLLBACK/COMMIT, like
+// Postgres; the protocol marks it failed when any statement errors.
 import { PgError, type Field, type Result } from "../postgres/wire";
+import { materializeInsert } from "./determinism";
 import { describe, run, type Params, type Runnable } from "./exec";
 import type { Session } from "./session";
 import type { Statement } from "./statement";
 
 interface Write { stmt: Runnable; params: Params; oids: number[] }
-export interface Tx { log: Write[]; failed: boolean }
+export interface Tx { log: Write[]; failed: boolean; startedAt: number }
 
 /** Thrown to make transactionSync roll back. */
 const ROLLBACK = Symbol("rollback");
@@ -55,15 +59,32 @@ function inSync<R>(s: Session, fn: () => R): R {
   }
 }
 
-export function execute(stmt: Statement, params: Params, s: Session, oids: number[] = []): Result {
+export async function execute(stmt: Statement, params: Params, s: Session, oids: number[] = []): Promise<Result> {
   if (stmt.kind === "transaction") return control(stmt.op, s);
   const tx = s.tx;
-  if (!tx) return run(stmt, params, s, oids);
+  if (!tx) {
+    if (!writes(stmt)) return run(stmt, params, s, oids);
+    await s.lock.acquire(s); // wait for any open write transaction to finish
+    try {
+      return run(stmt, params, s, oids);
+    } finally {
+      s.lock.release(s);
+    }
+  }
   if (tx.failed) throw aborted();
-  if (!tx.log.length && !writes(stmt)) return run(stmt, params, s, oids);
-  const result = rolledBack(s, () => run(stmt, params, s, oids));
-  if (writes(stmt)) tx.log.push({ stmt, params, oids });
+  if (writes(stmt)) await s.lock.acquire(s);
+  // Fixing defaults reads the table, which may exist only in this transaction.
+  const fixed = tx.log.length ? rolledBack(s, () => deterministic(stmt, s, tx.startedAt)) : deterministic(stmt, s, tx.startedAt);
+  if (!tx.log.length && !writes(fixed)) return run(fixed, params, s, oids);
+  const result = rolledBack(s, () => run(fixed, params, s, oids));
+  if (writes(fixed)) tx.log.push({ stmt: fixed, params, oids });
   return result;
+}
+
+/** The statement as it must be logged: reading the transaction's clock, with volatile INSERT values fixed. */
+function deterministic(stmt: Runnable, s: Session, clock: number): Runnable {
+  if (stmt.kind !== "sql") return stmt;
+  return { ...materializeInsert(stmt, s, clock), clock };
 }
 
 /**
@@ -89,15 +110,19 @@ export function describeStatement(stmt: Statement, params: Params, s: Session, o
 
 function control(op: "begin" | "commit" | "rollback", s: Session): Result {
   if (op === "begin") {
-    s.tx ??= { log: [], failed: false }; // a nested BEGIN is a warning in Postgres; keep the outer one
+    s.tx ??= { log: [], failed: false, startedAt: Date.now() }; // a nested BEGIN is a warning in Postgres; keep the outer one
     return { kind: "command", tag: "BEGIN" };
   }
   const tx = s.tx;
   s.tx = undefined;
-  // Postgres reports COMMIT of a failed transaction as ROLLBACK.
-  if (op === "rollback" || tx?.failed) return { kind: "command", tag: "ROLLBACK" };
-  if (tx?.log.length) inSync(s, () => replay(s, tx.log));
-  return { kind: "command", tag: "COMMIT" };
+  try {
+    // Postgres reports COMMIT of a failed transaction as ROLLBACK.
+    if (op === "rollback" || tx?.failed) return { kind: "command", tag: "ROLLBACK" };
+    if (tx?.log.length) inSync(s, () => replay(s, tx.log));
+    return { kind: "command", tag: "COMMIT" };
+  } finally {
+    s.lock.release(s);
+  }
 }
 
 /** ReadyForQuery status: I idle, T in transaction, E failed transaction. */

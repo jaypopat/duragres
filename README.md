@@ -41,4 +41,6 @@ New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit bind
 
 Connections are plaintext with trust authentication. Parameters must be sent in text format. SQL translation covers a subset of PostgreSQL. psql's `\dt`, `\d` and `\l` work; other `pg_catalog` queries fail with SQLSTATE 0A000.
 
-Durable Object SQLite has no interactive transactions: it rejects `BEGIN` and `SAVEPOINT`, and an open `storage.transaction()` blocks the object until it ends. So a transaction's writes are logged, previewed in a rolled-back `transactionSync` for each statement, and replayed at COMMIT. Values a statement generates (`now()`, `gen_random_uuid()`, serial IDs if another connection writes meanwhile) can differ between what the client saw and what was committed. Forks accept snapshots up to 1 MiB.
+Durable Object SQLite has no interactive transactions: it rejects `BEGIN` and `SAVEPOINT`, and an open `storage.transaction()` blocks the object until it ends. So a transaction's writes are logged, previewed in a rolled-back `transactionSync` for each statement, and replayed at COMMIT. Two rules make the replay commit exactly what the client saw. A transaction holds the database's single writer lock from its first write to COMMIT, so other writes wait. Each write is made deterministic first: `now()` is the transaction's start time, and omitted volatile defaults and `gen_random_uuid()` in `INSERT ... VALUES` become literal values. Other randomness in a write inside a transaction fails with SQLSTATE 0A000.
+
+Forks accept snapshots up to 1 MiB.
