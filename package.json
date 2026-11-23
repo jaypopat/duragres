@@ -21,7 +21,6 @@
     "dev": "wrangler dev --experimental-new-config",
     "deploy": "wrangler deploy --experimental-new-config",
     "typecheck": "bun check && bun check -p test",
-    "test": "bun test --timeout 90000",
-    "demo:fork": "bun examples/drizzle/fork.ts"
+    "test": "bun test --timeout 90000"
   }
 }

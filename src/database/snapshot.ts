@@ -1,6 +1,7 @@
-type Cell = string | number | null | { bytes: number[] };
-type Table = { name: string; ddl: string; columns: string[]; rows: Cell[][] };
-export type Snapshot = { version: 1; tables: Table[]; indexes: string[]; sequences: [string, number][] };
+// A database's tables, rows and indexes, sent to another Durable Object over RPC
+// (structured clone, so BLOBs travel as ArrayBuffers).
+type Table = { name: string; ddl: string; columns: string[]; rows: SqlStorageValue[][] };
+export type Snapshot = { tables: Table[]; indexes: string[]; sequences: [string, number][] };
 
 const quote = (name: string) => '"' + name.replaceAll('"', '""') + '"';
 
@@ -28,20 +29,18 @@ export function capture(storage: DurableObjectStorage): Snapshot {
       const name = quote(entry.name);
       const columns = sql.exec<{ name: string; hidden: number }>(`PRAGMA table_xinfo(${name})`)
         .toArray().filter((column) => column.hidden === 0).map((column) => column.name);
-      const rows = Array.from(sql.exec(`SELECT ${columns.map(quote).join(", ")} FROM ${name}`).raw(),
-        (row) => row.map((value) => value instanceof ArrayBuffer ? { bytes: Array.from(new Uint8Array(value)) } : value));
+      const rows = [...sql.exec(`SELECT ${columns.map(quote).join(", ")} FROM ${name}`).raw()];
       tables.push({ name: entry.name, ddl: entry.sql, columns, rows });
     }
 
     const sequences = sql.exec("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_sequence'").toArray().length
       ? Array.from(sql.exec("SELECT name, seq FROM sqlite_sequence").raw<[string, number]>())
       : [];
-    return { version: 1, tables, indexes, sequences };
+    return { tables, indexes, sequences };
   });
 }
 
 export function restore(storage: DurableObjectStorage, snapshot: Snapshot) {
-  if (snapshot.version !== 1) throw new Error("Unsupported snapshot version");
   const sql = storage.sql;
   storage.transactionSync(() => {
     sql.exec("PRAGMA defer_foreign_keys = ON");
@@ -49,10 +48,7 @@ export function restore(storage: DurableObjectStorage, snapshot: Snapshot) {
     for (const table of snapshot.tables) {
       const insert = `INSERT INTO ${quote(table.name)} (${table.columns.map(quote).join(", ")})
         VALUES (${table.columns.map(() => "?").join(", ")})`;
-      for (const row of table.rows) {
-        sql.exec(insert, ...row.map((value) => typeof value === "object" && value !== null
-          ? Uint8Array.from(value.bytes).buffer : value));
-      }
+      for (const row of table.rows) sql.exec(insert, ...row);
     }
     for (const ddl of snapshot.indexes) sql.exec(ddl);
     for (const [name, sequence] of snapshot.sequences) {

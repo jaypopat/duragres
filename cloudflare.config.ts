@@ -21,15 +21,13 @@ const worker = defineWorker(({ mode }) => {
     triggers: [triggers.connect({ protocol: "tcp", port: test ? 8798 : 8788, address: "localhost" })],
     env: {
       PG: bindings.durableObject({ worker: duragres, exportName: "PgDO" }),
-      SNAPSHOTS: bindings.r2({ name: "duragres-snapshots" }),
-      // New connections per client IP per minute; bounds create-on-connect abuse.
+      // New connections per client IP, and new databases per source database, per minute.
       CONNECT_LIMIT: bindings.rateLimit({ namespace: "1001", simple: { limit: test ? 20 : 60, period: 60 } }),
       LIMITS: bindings.json({
         ttlSeconds: test ? 30 : 72 * 3600, // unclaimed databases are deleted this long after creation
         idleSeconds: test ? 6 : 600, // idle connections are closed (57P05)
         maxConnections: test ? 3 : 10, // per database (53300)
       }),
-      FORK_TOKEN: bindings.secret(),
     },
   };
 });

@@ -11,8 +11,17 @@ export interface Session {
   database: string;
   user: string;
   lock: WriterLock; // shared by every connection to this database
+  databases: Databases;
   tx?: Tx; // open transaction (transactions.ts)
   inSync?: boolean; // already inside transactionSync: DDL must not open its own
+}
+
+/** Other databases, as seen from this one (implemented by the Durable Object). */
+export interface Databases {
+  /** Creates `name` with a copy of this database's committed contents, or empty. */
+  create(name: string, copy: boolean): Promise<"created" | "exists">;
+  /** Deletes `name`; with `force`, closes its connections first. */
+  drop(name: string, force: boolean): Promise<"dropped" | "missing" | "in-use">;
 }
 
 const SETTINGS: Record<string, string> = {

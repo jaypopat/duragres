@@ -3,16 +3,12 @@ import { afterAll, beforeAll } from "bun:test";
 import pg from "pg";
 import { startServer, type Server } from "./server";
 
-process.env.FORK_TOKEN ??= crypto.randomUUID();
-
 let server: Server;
 beforeAll(async () => {
   server = await startServer();
 });
 afterAll(() => server?.stop());
 
-export const forkToken = () => process.env.FORK_TOKEN!;
-export const httpUrl = () => server.http;
 export const databaseUrl = (name: string) => server.database(name);
 
 /** A fresh, valid database name, so tests never share state. */

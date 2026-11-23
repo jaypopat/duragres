@@ -6,7 +6,7 @@
 // queries are answered from their text; everything else is classified from its AST.
 // Rewrites are token edits on the original text, because Polyglot's PostgreSQL
 // generator is not lossless.
-import type { Result } from "../postgres/wire";
+import { PgError, type Result } from "../postgres/wire";
 import { QUERY_KINDS, isQuery } from "./catalog";
 import { findNodes, kindOf, parse, tokenize, type Expression, type Token } from "./polyglot";
 import { answerCatalogQuery } from "./psql-meta";
@@ -17,13 +17,15 @@ export type Statement =
   | { kind: "show"; name: string }
   | { kind: "noop"; tag: string } // SET, RESET, DISCARD, CREATE/DROP SCHEMA: SQLite has no settings or schemas
   | { kind: "catalog"; result: Result }
+  | { kind: "createDatabase"; name: string; template?: string }
+  | { kind: "dropDatabase"; name: string; ifExists: boolean; force: boolean }
   | { kind: "addConstraint"; table: string; constraint: string }
   // clock: inside a transaction, the start time every reading of the current time returns (determinism.ts)
   | { kind: "sql"; node: Expression; pg: string; tag: string; dml: boolean; ddl: boolean; readOnly: boolean; clock?: number };
 
 export function prepare(query: string, s: Session): Statement[] {
   return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
-    const utility = classifyUtility(words);
+    const utility = classifyUtility(words) ?? classifyDatabaseCommand(words, pg);
     if (utility) return [utility];
     if (readsCatalog) return [{ kind: "catalog", result: answerCatalogQuery(pg, s) }];
     // A comment-only statement parses to nothing.
@@ -51,6 +53,43 @@ function classifyUtility([first, second = ""]: string[]): Statement | undefined 
     case "DISCARD":
       return { kind: "noop", tag: `DISCARD ${second}` };
   }
+}
+
+/**
+ * CREATE DATABASE name [[WITH] TEMPLATE [=] template]
+ * DROP DATABASE [IF EXISTS] name [[WITH] (FORCE)]
+ */
+function classifyDatabaseCommand([first, second]: string[], pg: string): Statement | undefined {
+  if (second !== "DATABASE" || (first !== "CREATE" && first !== "DROP")) return undefined;
+  const tokens = tokenize(pg).slice(2);
+  const word = () => tokens[0]?.text.toUpperCase();
+  const take = (...expected: string[]) => {
+    if (!expected.includes(word() ?? "")) return false;
+    tokens.shift();
+    return true;
+  };
+  const name = () => {
+    const t = tokens.shift();
+    if (!isIdentifier(t)) throw new PgError("42601", `syntax error in ${first} DATABASE: expected a database name`);
+    return t!.type === "VAR" ? t!.text.toLowerCase() : t!.text; // unquoted names fold to lower case
+  };
+  const end = () => {
+    if (tokens.length) throw new PgError("0A000", `duragres does not support "${tokens[0].text}" in ${first} DATABASE`);
+  };
+
+  if (first === "CREATE") {
+    const db = name();
+    take("WITH");
+    const template = take("TEMPLATE") ? (take("="), name()) : undefined;
+    end();
+    return { kind: "createDatabase", name: db, template };
+  }
+  const ifExists = take("IF") && take("EXISTS");
+  const db = name();
+  take("WITH");
+  const force = take("(") && take("FORCE") && take(")");
+  end();
+  return { kind: "dropDatabase", name: db, ifExists, force };
 }
 
 function classify(node: Expression, pg: string): Statement {
