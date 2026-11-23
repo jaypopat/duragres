@@ -10,7 +10,7 @@ import { capture, restore, type Snapshot } from "./snapshot";
 import { createDatabase, createNotice, isLive, readMeta } from "./lifecycle";
 
 // ParameterStatus values psql/node-postgres look at, sent after AuthenticationOk.
-const STARTUP_PARAMS: [string, string][] = [
+const STARTUP_PARAMS: Array<[string, string]> = [
   ["server_encoding", "UTF8"], ["client_encoding", "UTF8"], ["DateStyle", "ISO, MDY"],
   ["integer_datetimes", "on"], ["standard_conforming_strings", "on"], ["TimeZone", "UTC"],
   ["application_name", ""], ["IntervalStyle", "postgres"], ["is_superuser", "on"],

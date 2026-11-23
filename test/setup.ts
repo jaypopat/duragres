@@ -22,7 +22,7 @@ export async function client(name: string) {
 }
 
 /** Every result of a multi-statement simple query (node-postgres returns an array for these). */
-export async function queryAll(c: pg.Client, sql: string): Promise<pg.QueryResult[]> {
-  const results: pg.QueryResult | pg.QueryResult[] = await c.query(sql);
+export async function queryAll(c: pg.Client, sql: string): Promise<Array<pg.QueryResult>> {
+  const results: pg.QueryResult | Array<pg.QueryResult> = await c.query(sql);
   return Array.isArray(results) ? results : [results];
 }

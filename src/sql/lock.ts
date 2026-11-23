@@ -6,7 +6,7 @@ type Owner = object;
 
 export class WriterLock {
   private holder?: Owner;
-  private queue: { owner: Owner; grant: () => void }[] = [];
+  private queue: Array<{ owner: Owner; grant: () => void }> = [];
 
   async acquire(owner: Owner): Promise<void> {
     if (this.holder === owner) return;

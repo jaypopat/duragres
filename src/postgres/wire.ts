@@ -6,7 +6,7 @@ export const OID = { bool: 16, bytea: 17, int8: 20, int4: 23, text: 25, oid: 26,
 export interface Field { name: string; oid: number }
 
 export type Result =
-  | { kind: "rows"; fields: Field[]; rows: (string | null)[][]; tag: string }
+  | { kind: "rows"; fields: Array<Field>; rows: Array<string | null>[]; tag: string }
   | { kind: "command"; tag: string }
   | { kind: "empty" };
 
@@ -20,7 +20,7 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 class Body {
-  private parts: Uint8Array[] = [];
+  private parts: Array<Uint8Array> = [];
   private len = 0;
   private push(b: Uint8Array) { this.parts.push(b); this.len += b.length; return this; }
   byte(n: number) { return this.push(Uint8Array.of(n)); }
@@ -50,17 +50,17 @@ export const msg = {
   closeComplete: () => new Body().message("3"),
   noData: () => new Body().message("n"),
   portalSuspended: () => new Body().message("s"),
-  parameterDescription: (oids: number[]) => {
+  parameterDescription: (oids: Array<number>) => {
     const b = new Body().int16(oids.length);
     for (const o of oids) b.int32(o);
     return b.message("t");
   },
-  rowDescription(fields: Field[]) {
+  rowDescription(fields: Array<Field>) {
     const b = new Body().int16(fields.length);
     for (const f of fields) b.cstr(f.name).int32(0).int16(0).int32(f.oid).int16(TYPLEN[f.oid] ?? -1).int32(-1).int16(0);
     return b.message("T");
   },
-  dataRow(values: (string | null)[]) {
+  dataRow(values: Array<string | null>) {
     const b = new Body().int16(values.length);
     for (const v of values) {
       if (v === null) { b.int32(-1); continue; }
@@ -77,13 +77,13 @@ export const msg = {
 };
 
 /** A result built in code rather than read from SQLite; values are sent as text. */
-export function rows(cols: [string, number][], values: unknown[][], tag = `SELECT ${values.length}`): Extract<Result, { kind: "rows" }> {
-  const fields: Field[] = cols.map(([name, oid]) => ({ name, oid }));
+export function rows(cols: Array<[string, number]>, values: Array<unknown>[], tag = `SELECT ${values.length}`): Extract<Result, { kind: "rows" }> {
+  const fields: Array<Field> = cols.map(([name, oid]) => ({ name, oid }));
   return { kind: "rows", fields, rows: values.map((r) => r.map((v) => (v === null || v === undefined ? null : String(v)))), tag };
 }
 
 /** Messages for a full result (no ReadyForQuery). `describe` controls RowDescription. */
-export function encodeResult(r: Result, describe = true): Uint8Array[] {
+export function encodeResult(r: Result, describe = true): Array<Uint8Array> {
   if (r.kind === "empty") return [msg.emptyQuery()];
   if (r.kind === "command") return [msg.commandComplete(r.tag)];
   const out = describe ? [msg.rowDescription(r.fields)] : [];

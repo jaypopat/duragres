@@ -13,10 +13,10 @@ import { T, decodeParam, encodeValue, inferType, typeByOid } from "./types";
 
 /** Statements that run synchronously against this database. */
 export type Runnable = Exclude<Statement, { kind: "transaction" | "isolation" | "createDatabase" | "dropDatabase" }>;
-export type Params = (string | null)[];
+export type Params = Array<string | null>;
 
 // SQLite error messages -> SQLSTATE. Anything unrecognised is an internal error, not a syntax error.
-const SQLITE_ERRORS: [RegExp, string, string][] = [
+const SQLITE_ERRORS: Array<[RegExp, string, string]> = [
   [/UNIQUE constraint failed/, "23505", "duplicate key value violates unique constraint"],
   [/NOT NULL constraint failed/, "23502", "null value violates not-null constraint"],
   [/FOREIGN KEY constraint failed/, "23503", "violates foreign key constraint"],
@@ -39,7 +39,7 @@ export function sqliteErrorToPg(e: unknown): PgError {
   return hit ? new PgError(hit[1], `${hit[2]} (${m})`) : new PgError("XX000", m);
 }
 
-export function run(stmt: Runnable, params: Params, s: Session, paramOids: number[] = []): Result {
+export function run(stmt: Runnable, params: Params, s: Session, paramOids: Array<number> = []): Result {
   try {
     switch (stmt.kind) {
       case "show":
@@ -65,7 +65,7 @@ const numberParams = (sql: string) => sql.replace(/'(?:[^']|'')*'|\$(\d+)/g, (m,
 /** SQLite wants exactly as many values as the highest ?n in the statement. */
 const highestParam = (sql: string) => Math.max(0, ...[...sql.matchAll(/'(?:[^']|'')*'|\?(\d+)/g)].map((m) => Number(m[1] ?? 0)));
 
-function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s: Session, paramOids: number[]): Result {
+function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s: Session, paramOids: Array<number>): Result {
   const catalog = loadCatalog(s.sql);
   const [typed] = annotate(stmt.pg, schemaOf(catalog));
   const inferred = paramTypes(typed, catalog);
@@ -81,8 +81,8 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
 
   // A translation can be several SQLite statements; rows from all of them form the result.
   const execute = () => {
-    let names: string[] = [];
-    const rows: SqlStorageValue[][] = [];
+    let names: Array<string> = [];
+    const rows: Array<SqlStorageValue>[] = [];
     let changed = 0;
     for (const q of sqlite) {
       const cursor = s.sql.exec(q, ...params.slice(0, highestParam(q)));
@@ -119,9 +119,9 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
 }
 
 /** Result columns named and typed as Postgres would where known; other types are inferred from the values. */
-function rowsResult(columns: OutputColumn[], raw: unknown[][], tag: string): Result {
+function rowsResult(columns: Array<OutputColumn>, raw: Array<unknown>[], tag: string): Result {
   const types = columns.map((c, i) => c.type ?? inferType(raw.find((r) => r[i] !== null && r[i] !== undefined)?.[i] ?? null));
-  const fields: Field[] = columns.map((c, i) => ({ name: c.name, oid: types[i].oid }));
+  const fields: Array<Field> = columns.map((c, i) => ({ name: c.name, oid: types[i].oid }));
   return { kind: "rows", fields, rows: raw.map((r) => r.map((v, i) => encodeValue(v, types[i]))), tag };
 }
 
@@ -130,7 +130,7 @@ function rowsResult(columns: OutputColumn[], raw: unknown[][], tag: string): Res
  * null when it returns no rows, undefined when they can only be learnt by running it.
  * A column whose type is unknown is described as text.
  */
-export function describe(stmt: Runnable, s: Session): Field[] | null | undefined {
+export function describe(stmt: Runnable, s: Session): Array<Field> | null | undefined {
   switch (stmt.kind) {
     case "show":
     case "catalog": {

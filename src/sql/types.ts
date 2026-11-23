@@ -22,7 +22,7 @@ export const T = {
   jsonb: { oid: 3802, name: "jsonb" },
 } satisfies Record<string, PgType>;
 
-const BY_DECLARED: [RegExp, PgType][] = [
+const BY_DECLARED: Array<[RegExp, PgType]> = [
   [/^(SERIAL4?|INT4?|INTEGER)$/, T.int4],
   [/^(BIGSERIAL|SERIAL8|BIGINT|INT8)$/, T.int8],
   [/^(SMALLSERIAL|SERIAL2|SMALLINT|INT2)$/, T.int2],

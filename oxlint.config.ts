@@ -17,7 +17,6 @@ export default defineConfig({
     "quality/no-object-parameters": "off",
     "quality/no-unknown-returns": "off",
     "quality/no-unsafe-dictionary-type": "off",
-    "typescript/array-type": "off",
     "typescript/await-thenable": "off",
     "typescript/no-non-null-assertion": "off",
     "typescript/no-unnecessary-type-assertion": "off",

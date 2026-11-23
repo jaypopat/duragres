@@ -26,8 +26,8 @@ export type Statement =
   // clock: inside a transaction, the start time every reading of the current time returns (determinism.ts)
   | { kind: "sql"; node: Expression; pg: string; tag: string; dml: boolean; ddl: boolean; readOnly: boolean; clock?: number };
 
-export function prepare(query: string, s: Session): Statement[] {
-  return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
+export function prepare(query: string, s: Session): Array<Statement> {
+  return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Array<Statement> => {
     const utility = classifyUtility(words, pg) ?? classifyDatabaseCommand(words, pg);
     if (utility) return [utility];
     if (readsCatalog) return [{ kind: "catalog", result: answerCatalogQuery(pg, s) }];
@@ -37,7 +37,7 @@ export function prepare(query: string, s: Session): Statement[] {
 }
 
 /** Classifies a statement by its first two keywords, upper-cased. */
-function classifyUtility([first, second = ""]: string[], pg: string): Statement | undefined {
+function classifyUtility([first, second = ""]: Array<string>, pg: string): Statement | undefined {
   switch (first) {
     case "BEGIN":
     case "START":
@@ -60,7 +60,7 @@ function classifyUtility([first, second = ""]: string[], pg: string): Statement 
 }
 
 /** The level after ISOLATION LEVEL in BEGIN, START TRANSACTION or SET TRANSACTION, if any. */
-function isolationLevel(tokens: Token[]): Isolation | undefined {
+function isolationLevel(tokens: Array<Token>): Isolation | undefined {
   const at = tokens.findIndex((t, i) => t.text.toUpperCase() === "ISOLATION" && tokens[i + 1]?.text.toUpperCase() === "LEVEL");
   if (at < 0) return undefined;
   const [a = "", b = ""] = tokens.slice(at + 2, at + 4).map((t) => t.text.toLowerCase());
@@ -74,7 +74,7 @@ function isolationLevel(tokens: Token[]): Isolation | undefined {
  * NAMES, SCHEMA, TRANSACTION and SESSION CHARACTERISTICS AS TRANSACTION.
  * `tokens` follow the SET keyword.
  */
-function classifySet(tokens: Token[]): Statement {
+function classifySet(tokens: Array<Token>): Statement {
   const word = (i: number) => tokens[i]?.text.toUpperCase();
   if (word(0) === "SESSION" && word(1) !== "CHARACTERISTICS" && word(1) !== "AUTHORIZATION") tokens = tokens.slice(1);
   else if (word(0) === "LOCAL") tokens = tokens.slice(1);
@@ -94,8 +94,8 @@ function classifySet(tokens: Token[]): Statement {
     skip++; // TO or =
   }
   // The value: comma-separated items, each one or more tokens (strings arrive unquoted).
-  const items: string[] = [];
-  let item: string[] = [];
+  const items: Array<string> = [];
+  let item: Array<string> = [];
   for (const t of tokens.slice(skip)) {
     if (t.type === "COMMA") {
       items.push(item.join(" "));
@@ -115,11 +115,11 @@ function classifySet(tokens: Token[]): Statement {
  * CREATE DATABASE name [[WITH] TEMPLATE [=] template]
  * DROP DATABASE [IF EXISTS] name [[WITH] (FORCE)]
  */
-function classifyDatabaseCommand([first, second]: string[], pg: string): Statement | undefined {
+function classifyDatabaseCommand([first, second]: Array<string>, pg: string): Statement | undefined {
   if (second !== "DATABASE" || (first !== "CREATE" && first !== "DROP")) return undefined;
   const tokens = tokenize(pg).slice(2);
   const word = () => tokens[0]?.text.toUpperCase();
-  const take = (...expected: string[]) => {
+  const take = (...expected: Array<string>) => {
     if (!expected.includes(word() ?? "")) return false;
     tokens.shift();
     return true;
@@ -188,17 +188,17 @@ function sessionValue(fn: string, s: Session): string {
   return s.user;
 }
 
-interface Split { pg: string; words: string[]; readsCatalog: boolean }
+interface Split { pg: string; words: Array<string>; readsCatalog: boolean }
 
 /**
  * Non-empty statements of `query` with their first two keywords, flattened schema
  * qualifiers dropped and session functions replaced by their values.
  */
-function splitAndRewrite(query: string, s: Session): Split[] {
+function splitAndRewrite(query: string, s: Session): Array<Split> {
   const tokens = tokenize(query);
-  const statements: Split[] = [];
+  const statements: Array<Split> = [];
   let text = "";
-  let words: string[] = [];
+  let words: Array<string> = [];
   let readsCatalog = false;
   let at = tokens[0]?.start ?? 0; // query[at, edit) is copied verbatim before each edit
   const emit = (end: number, replacement: string) => {
