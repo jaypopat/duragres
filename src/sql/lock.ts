@@ -1,8 +1,11 @@
 // One writer per database. A connection holds the lock from its transaction's first
-// write until COMMIT or ROLLBACK, so the committed state its replay runs on cannot
-// change underneath it. Writes outside a transaction wait for it too; reads never do.
+// write (or from BEGIN, at repeatable read and serializable) until COMMIT or ROLLBACK,
+// so the committed state its replay runs on cannot change underneath it. Writes
+// outside a transaction wait for it too; reads never do.
+import type { Session } from "./session";
 
-type Owner = object;
+/** Each connection's session owns its claim on the lock. */
+type Owner = Session;
 
 export class WriterLock {
   private holder?: Owner;
