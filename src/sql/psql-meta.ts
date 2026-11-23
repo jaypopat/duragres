@@ -6,7 +6,7 @@ import type { Result } from '../postgres/wire';
 import type { Session } from "./session";
 import { loadCatalog } from "./catalog";
 
-const OID_BASE = 16384; // first user OID in Postgres
+const OID_BASE = 16_384; // first user OID in Postgres
 const HIDDEN = /^(sqlite_|_cf_|__|_pg_|_duragres_)/; // SQLite internals, DO metadata, Miniflare's __miniflare_do_name, our shadow catalog
 
 interface Handler {

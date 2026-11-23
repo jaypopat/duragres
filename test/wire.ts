@@ -46,7 +46,7 @@ export async function open(host: string, port: number, database: string) {
     }
   };
   await new Promise<void>((r) => socket.once("connect", () => r()));
-  const startup = Buffer.concat([int32(196608), cstr("user"), cstr("demo"), cstr("database"), cstr(database), Buffer.from([0])]);
+  const startup = Buffer.concat([int32(196_608), cstr("user"), cstr("demo"), cstr("database"), cstr(database), Buffer.from([0])]);
   socket.write(Buffer.concat([int32(startup.length + 4), startup]));
   await untilReady();
   return {

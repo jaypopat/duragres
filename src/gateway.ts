@@ -3,9 +3,9 @@
 import { DB_NAME } from "./database/lifecycle";
 import { closeQuietly, refuse } from "./postgres/socket";
 
-const SSL_REQUEST = 80877103;
-const GSSENC_REQUEST = 80877104;
-const CANCEL_REQUEST = 80877102;
+const SSL_REQUEST = 80_877_103;
+const GSSENC_REQUEST = 80_877_104;
+const CANCEL_REQUEST = 80_877_102;
 const MAX_STARTUP_LENGTH = 10_000;
 
 interface Startup { bytes: Uint8Array; params: Record<string, string> }
