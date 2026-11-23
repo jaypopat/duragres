@@ -9,7 +9,6 @@ export default defineConfig({
     "@nkzw/no-instanceof": "off",
     "curly": "off",
     "no-console": "off",
-    "no-promise-executor-return": "off",
     "import/no-namespace": "off",
     "quality/no-array-filter-map": "off",
     "quality/no-object-parameters": "off",

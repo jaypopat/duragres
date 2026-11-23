@@ -32,7 +32,9 @@ export async function open(host: string, port: number, database: string) {
     waiting?.();
   });
   const next = async (): Promise<Message> => {
-    while (buffer.length < 5 || buffer.length < 1 + buffer.readInt32BE(1)) await new Promise<void>((r) => (waiting = r));
+    while (buffer.length < 5 || buffer.length < 1 + buffer.readInt32BE(1)) await new Promise<void>((r) => {
+      waiting = r;
+    });
     const length = buffer.readInt32BE(1);
     const msg = { type: String.fromCharCode(buffer[0]), body: buffer.subarray(5, 1 + length) };
     buffer = buffer.subarray(1 + length);
@@ -45,7 +47,9 @@ export async function open(host: string, port: number, database: string) {
       out.push(m);
     }
   };
-  await new Promise<void>((r) => socket.once("connect", () => r()));
+  await new Promise<void>((r) => {
+    socket.once("connect", () => r());
+  });
   const startup = Buffer.concat([int32(196_608), cstr("user"), cstr("demo"), cstr("database"), cstr(database), Buffer.from([0])]);
   socket.write(Buffer.concat([int32(startup.length + 4), startup]));
   await untilReady();
