@@ -10,7 +10,6 @@ export default defineConfig({
     "curly": "off",
     "no-console": "off",
     "import/no-namespace": "off",
-    "quality/no-unsafe-dictionary-type": "off",
     "typescript/await-thenable": "off",
     "unicorn/catch-error-name": "off",
     "unicorn/text-encoding-identifier-case": "off",
