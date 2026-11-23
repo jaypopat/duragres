@@ -19,8 +19,9 @@ interface Rel { oid: number; name: string; kind: "r" | "i"; sql: string | null; 
 
 function relations(s: Session): Array<Rel> {
   return [...s.sql.exec("SELECT rowid, type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','index') ORDER BY rowid").raw()]
-    .map(([rowid, type, name, tbl, sql]) => ({ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? ("r" as const) : ("i" as const), sql: typeof sql === "string" ? sql : null, tbl: String(tbl) }))
-    .filter((r) => !HIDDEN.test(r.name) && !HIDDEN.test(r.tbl));
+    .flatMap(([rowid, type, name, tbl, sql]): Array<Rel> =>
+      HIDDEN.test(String(name)) || HIDDEN.test(String(tbl)) ? []
+      : [{ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? "r" : "i", sql: typeof sql === "string" ? sql : null, tbl: String(tbl) }]);
 }
 
 /** psql turns `\d users` into `c.relname OPERATOR(pg_catalog.~) '^(users)$'`. */

@@ -10,7 +10,6 @@ export default defineConfig({
     "curly": "off",
     "no-console": "off",
     "import/no-namespace": "off",
-    "quality/no-array-filter-map": "off",
     "quality/no-object-parameters": "off",
     "quality/no-unknown-returns": "off",
     "quality/no-unsafe-dictionary-type": "off",
