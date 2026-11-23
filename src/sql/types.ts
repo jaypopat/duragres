@@ -83,7 +83,7 @@ export function encodeValue(v: unknown, type: PgType): string | null {
 }
 
 /** Text-format bound parameter -> value to bind in SQLite. */
-export function decodeParam(text: string | null, type: PgType | undefined): unknown {
+export function decodeParam(text: string | null, type: PgType | undefined): SqlStorageValue {
   if (text === null || !type) return text;
   switch (type.oid) {
     case T.bool.oid: {
