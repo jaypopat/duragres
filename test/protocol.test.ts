@@ -91,6 +91,32 @@ test("session functions, SHOW and SET are answered without SQLite support", asyn
     expect((await c.query("SHOW search_path")).rows).toEqual([{ search_path: '"$user", public' }]);
     expect((await c.query("SET client_min_messages TO warning")).command).toBe("SET");
     await expect(c.query("SHOW nonsense")).rejects.toMatchObject({ code: "42704" });
+    expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
+  } finally {
+    await c.end();
+  }
+});
+
+test("SET accepts what Duragres does and refuses what it can't", async () => {
+  const c = await client(freshDb("set"));
+  try {
+    for (const q of [
+      "SET TIME ZONE 'UTC'", "SET timezone = 'Etc/UTC'", "SET LOCAL TIME ZONE LOCAL", "SET search_path TO \"$user\", public",
+      "SET NAMES 'UTF8'", "SET DateStyle = ISO, MDY", "SET application_name = 'app'", "SET statement_timeout = 0", "SET search_path = DEFAULT",
+    ]) {
+      expect((await c.query(q)).command).toBe("SET");
+    }
+    for (const q of ["SET TIME ZONE 'America/New_York'", "SET search_path TO app", "SET client_encoding = 'LATIN1'", "SET DateStyle = 'German'"]) {
+      await expect(c.query(q)).rejects.toMatchObject({ code: "0A000" });
+    }
+    await expect(c.query("SET default_transaction_isolation = 'sometimes'")).rejects.toMatchObject({ code: "22023" });
+    await c.query("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE");
+    expect((await c.query("SHOW default_transaction_isolation")).rows).toEqual([{ default_transaction_isolation: "serializable" }]);
+    await c.query("BEGIN");
+    expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "serializable" }]);
+    await c.query("COMMIT");
+    await c.query("RESET ALL");
+    expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
   } finally {
     await c.end();
   }

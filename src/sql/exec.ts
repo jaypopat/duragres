@@ -12,7 +12,7 @@ import { translate } from "./translate";
 import { T, decodeParam, encodeValue, inferType, typeByOid } from "./types";
 
 /** Statements that run synchronously against this database. */
-export type Runnable = Exclude<Statement, { kind: "transaction" | "createDatabase" | "dropDatabase" }>;
+export type Runnable = Exclude<Statement, { kind: "transaction" | "isolation" | "createDatabase" | "dropDatabase" }>;
 export type Params = (string | null)[];
 
 // SQLite error messages -> SQLSTATE. Anything unrecognised is an internal error, not a syntax error.
@@ -43,7 +43,7 @@ export function run(stmt: Runnable, params: Params, s: Session, paramOids: numbe
   try {
     switch (stmt.kind) {
       case "show":
-        return show(stmt.name);
+        return show(stmt.name, s);
       case "noop":
         return { kind: "command", tag: stmt.tag };
       case "catalog":

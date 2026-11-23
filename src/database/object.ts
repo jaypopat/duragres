@@ -78,7 +78,7 @@ export class PgDO extends DurableObject<Env> {
           const user = state.clientParams!.user;
           for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
-          session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock, databases: this.databases };
+          session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock, databases: this.databases, isolation: "read committed" };
           protocol = new Protocol(session);
           touch();
         },

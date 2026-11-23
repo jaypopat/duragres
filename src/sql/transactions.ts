@@ -12,17 +12,26 @@
 //   so no other connection changes the committed state it replays on;
 // - each write is made deterministic before it is logged (determinism.ts).
 //
+// Repeatable read and serializable transactions take the lock at BEGIN instead, so
+// they also read one unchanging committed state: they run one at a time.
+//
 // After an error the transaction is aborted (25P02) until ROLLBACK/COMMIT, like
 // Postgres; the protocol marks it failed when any statement errors.
 import { PgError, type Field, type Result } from "../postgres/wire";
 import { runDatabaseCommand } from "./databases";
 import { materializeInsert } from "./determinism";
 import { describe, run, type Params, type Runnable } from "./exec";
-import type { Session } from "./session";
+import { lockedFromBegin, type Isolation, type Session } from "./session";
 import type { Statement } from "./statement";
 
 interface Write { stmt: Runnable; params: Params; oids: number[] }
-export interface Tx { log: Write[]; failed: boolean; startedAt: number }
+export interface Tx {
+  log: Write[];
+  failed: boolean;
+  startedAt: number;
+  isolation: Isolation;
+  queried: boolean; // a statement has run: the isolation level can no longer change
+}
 
 /** Thrown to make transactionSync roll back. */
 const ROLLBACK = Symbol("rollback");
@@ -61,7 +70,8 @@ function inSync<R>(s: Session, fn: () => R): R {
 }
 
 export async function execute(stmt: Statement, params: Params, s: Session, oids: number[] = []): Promise<Result> {
-  if (stmt.kind === "transaction") return control(stmt.op, s);
+  if (stmt.kind === "transaction") return stmt.op === "begin" ? begin(stmt.isolation, s) : end(stmt.op, s);
+  if (stmt.kind === "isolation") return setIsolation(stmt, s);
   if (stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return runDatabaseCommand(stmt, s);
   const tx = s.tx;
   if (!tx) {
@@ -74,6 +84,7 @@ export async function execute(stmt: Statement, params: Params, s: Session, oids:
     }
   }
   if (tx.failed) throw aborted();
+  tx.queried = true;
   if (writes(stmt)) await s.lock.acquire(s);
   // Fixing defaults reads the table, which may exist only in this transaction.
   const fixed = tx.log.length ? rolledBack(s, () => deterministic(stmt, s, tx.startedAt)) : deterministic(stmt, s, tx.startedAt);
@@ -94,7 +105,7 @@ function deterministic(stmt: Runnable, s: Session, clock: number): Runnable {
  * effects. Falls back to running it and rolling back when it can't be described statically.
  */
 export function describeStatement(stmt: Statement, params: Params, s: Session, oids: number[]): Field[] | null {
-  if (stmt.kind === "transaction" || stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return null;
+  if (stmt.kind === "transaction" || stmt.kind === "isolation" || stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return null;
   if (s.tx?.failed) throw aborted();
   const byRunning = () => {
     const result = run(stmt, params, s, oids);
@@ -110,11 +121,37 @@ export function describeStatement(stmt: Statement, params: Params, s: Session, o
   return writes(stmt) ? rolledBack(s, byRunning) : byRunning();
 }
 
-function control(op: "begin" | "commit" | "rollback", s: Session): Result {
-  if (op === "begin") {
-    s.tx ??= { log: [], failed: false, startedAt: Date.now() }; // a nested BEGIN is a warning in Postgres; keep the outer one
-    return { kind: "command", tag: "BEGIN" };
+async function begin(isolation: Isolation | undefined, s: Session): Promise<Result> {
+  // A nested BEGIN is a warning in Postgres; keep the outer transaction.
+  if (!s.tx) {
+    const tx: Tx = { log: [], failed: false, startedAt: Date.now(), isolation: isolation ?? s.isolation, queried: false };
+    s.tx = tx;
+    if (lockedFromBegin(tx.isolation)) await s.lock.acquire(s);
+    // The clock starts once the transaction can run.
+    tx.startedAt = Date.now();
   }
+  return { kind: "command", tag: "BEGIN" };
+}
+
+async function setIsolation(stmt: Extract<Statement, { kind: "isolation" }>, s: Session): Promise<Result> {
+  const result: Result = { kind: "command", tag: stmt.tag };
+  if (stmt.scope === "session") {
+    s.isolation = stmt.level ?? "read committed";
+    return result;
+  }
+  const tx = s.tx;
+  if (!tx) return result; // Postgres warns that SET TRANSACTION outside a transaction block has no effect
+  if (tx.failed) throw aborted();
+  if (tx.queried) throw new PgError("25001", "SET TRANSACTION ISOLATION LEVEL must be called before any query");
+  tx.isolation = stmt.level ?? s.isolation;
+  if (lockedFromBegin(tx.isolation)) {
+    await s.lock.acquire(s);
+    tx.startedAt = Date.now();
+  }
+  return result;
+}
+
+function end(op: "commit" | "rollback", s: Session): Result {
   const tx = s.tx;
   s.tx = undefined;
   try {

@@ -53,4 +53,8 @@ Connections are plaintext with trust authentication. Parameters must be sent in 
 
 Durable Object SQLite has no interactive transactions: it rejects `BEGIN` and `SAVEPOINT`, and an open `storage.transaction()` blocks the object until it ends. So a transaction's writes are logged, previewed in a rolled-back `transactionSync` for each statement, and replayed at COMMIT. Two rules make the replay commit exactly what the client saw. A transaction holds the database's single writer lock from its first write to COMMIT, so other writes wait. Each write is made deterministic first: `now()` is the transaction's start time, and omitted volatile defaults and `gen_random_uuid()` in `INSERT ... VALUES` become literal values. Other randomness in a write inside a transaction fails with SQLSTATE 0A000.
 
+The default isolation level is read committed: until its first write, a transaction sees other connections' commits. `REPEATABLE READ` and `SERIALIZABLE` take the writer lock at `BEGIN`, so those transactions are truly serializable but run one at a time, and block writers even when they only read.
+
+The server is always UTC, UTF8 and ISO dates, with one schema. `SET` to another time zone, encoding, date style or `search_path` fails with SQLSTATE 0A000; settings that don't change results, such as `application_name` or `statement_timeout`, are accepted and ignored.
+
 A copy is sent between Durable Objects in one RPC message, which bounds the size of a database that can be copied.
