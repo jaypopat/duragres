@@ -1,15 +1,15 @@
 // Runs one prepared statement on SQLite and builds its PostgreSQL result.
 // DDL and its shadow-catalog update commit together in one transactionSync.
-import { PgError } from '../postgres/wire';
-import type { Field, Result } from '../postgres/wire';
+import { PgError } from "../postgres/wire";
+import type { Field, Result } from "../postgres/wire";
 import { annotate } from "./polyglot";
-import { applyChanges, changesOf, loadCatalog, outputColumns, paramTypes, returnsRows, schemaOf } from './catalog';
-import type { OutputColumn } from './catalog';
+import { applyChanges, changesOf, loadCatalog, outputColumns, paramTypes, returnsRows, schemaOf } from "./catalog";
+import type { OutputColumn } from "./catalog";
 import { expandDefaults } from "./defaults";
 import { freezeClock, usesRandomness } from "./determinism";
 import { addConstraint } from "./rebuild";
-import { show } from './session';
-import type { Session } from './session';
+import { show } from "./session";
+import type { Session } from "./session";
 import type { Statement } from "./statement";
 import { translate } from "./translate";
 import { T, decodeParam, encodeValue, inferType, typeByOid } from "./types";

@@ -1,8 +1,8 @@
 // Answers for the catalog queries psql 18 sends for \dt, \d <table> and \l.
 // The handlers match the exact queries psql sends (see them with `psql -E`).
 // Everything is derived from sqlite_master and pragma_table_info().
-import { OID, PgError, rows as table } from '../postgres/wire';
-import type { Result } from '../postgres/wire';
+import { OID, PgError, rows as table } from "../postgres/wire";
+import type { Result } from "../postgres/wire";
 import type { Session } from "./session";
 import { loadCatalog } from "./catalog";
 

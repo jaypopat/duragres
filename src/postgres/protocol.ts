@@ -1,14 +1,14 @@
 // Post-authentication message handling: the simple query protocol (Q) and the
 // extended protocol (Parse/Bind/Describe/Execute/Sync) that drivers use for $n parameters.
-import { sqliteErrorToPg } from '../sql/exec';
-import type { Params } from '../sql/exec';
+import { sqliteErrorToPg } from "../sql/exec";
+import type { Params } from "../sql/exec";
 import { findNodes } from "../sql/polyglot";
 import type { Session } from "../sql/session";
-import { prepare } from '../sql/statement';
-import type { Statement } from '../sql/statement';
+import { prepare } from "../sql/statement";
+import type { Statement } from "../sql/statement";
 import { describeStatement, execute, txStatus } from "../sql/transactions";
-import { OID, PgError, Reader, decodeText, encodeResult, msg } from './wire';
-import type { Field, Result } from './wire';
+import { OID, PgError, Reader, decodeText, encodeResult, msg } from "./wire";
+import type { Field, Result } from "./wire";
 
 // pg-gateway treats an empty iterable as "not handled" and falls back to its own
 // handler, so "reply with nothing" must be one zero-length chunk.

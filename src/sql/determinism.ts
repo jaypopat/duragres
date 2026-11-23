@@ -10,8 +10,8 @@
 //
 // Any other randomness in a write inside a transaction fails with 0A000.
 import { PgError } from "../postgres/wire";
-import { findNodes, generate, parse, tokenize } from './polyglot';
-import type { Expression, Variant } from './polyglot';
+import { findNodes, generate, parse, tokenize } from "./polyglot";
+import type { Expression, Variant } from "./polyglot";
 import type { Session } from "./session";
 import type { Statement } from "./statement";
 

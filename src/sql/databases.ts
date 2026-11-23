@@ -2,8 +2,8 @@
 // Knowing a database's name is what lets you connect to it, so it is also what lets
 // you drop it; copying one requires being connected to it.
 import { DB_NAME } from "../database/lifecycle";
-import { PgError } from '../postgres/wire';
-import type { Result } from '../postgres/wire';
+import { PgError } from "../postgres/wire";
+import type { Result } from "../postgres/wire";
 import type { Session } from "./session";
 import type { Statement } from "./statement";
 

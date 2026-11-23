@@ -6,14 +6,14 @@
 // queries are answered from their text; everything else is classified from its AST.
 // Rewrites are token edits on the original text, because Polyglot's PostgreSQL
 // generator is not lossless.
-import { PgError } from '../postgres/wire';
-import type { Result } from '../postgres/wire';
+import { PgError } from "../postgres/wire";
+import type { Result } from "../postgres/wire";
 import { QUERY_KINDS, isQuery } from "./catalog";
-import { findNodes, kindOf, parse, tokenize } from './polyglot';
-import type { Expression, Token } from './polyglot';
+import { findNodes, kindOf, parse, tokenize } from "./polyglot";
+import type { Expression, Token } from "./polyglot";
 import { answerCatalogQuery } from "./psql-meta";
-import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting } from './session';
-import type { Isolation, Session } from './session';
+import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting } from "./session";
+import type { Isolation, Session } from "./session";
 
 export type Statement =
   | { kind: "transaction"; op: "begin"; isolation?: Isolation }
