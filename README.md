@@ -39,4 +39,6 @@ New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit bind
 
 ## Prototype limits
 
-Connections are plaintext with trust authentication. SQL translation and catalog introspection cover a subset of PostgreSQL. Extended-protocol Describe runs the statement before Execute. Interactive transactions replay their writes at COMMIT, so generated values can differ from the ones returned earlier. Forks accept snapshots up to 1 MiB.
+Connections are plaintext with trust authentication. Parameters must be sent in text format. SQL translation covers a subset of PostgreSQL. psql's `\dt`, `\d` and `\l` work; other `pg_catalog` queries fail with SQLSTATE 0A000.
+
+Durable Object SQLite has no interactive transactions: it rejects `BEGIN` and `SAVEPOINT`, and an open `storage.transaction()` blocks the object until it ends. So a transaction's writes are logged, previewed in a rolled-back `transactionSync` for each statement, and replayed at COMMIT. Values a statement generates (`now()`, `gen_random_uuid()`, serial IDs if another connection writes meanwhile) can differ between what the client saw and what was committed. Forks accept snapshots up to 1 MiB.
