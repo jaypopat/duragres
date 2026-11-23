@@ -2,14 +2,16 @@
 // next to the SQLite tables. Polyglot annotates statements against it to type result
 // columns; parameters are typed from the column they are compared with or stored in.
 import type { Schema } from "@polyglot-sql/sdk/manual";
-import { dataTypeSql, findNodes, inferredType, kindOf, type Body, type DataType, type Expression } from "./polyglot";
-import { T, typeByOid, typeFromDeclared, type PgType } from "./types";
+import { dataTypeSql, findNodes, inferredType, kindOf } from "./polyglot";
+import type { Body, DataType, Expression } from "./polyglot";
+import { T, typeByOid, typeFromDeclared } from "./types";
+import type { PgType } from "./types";
 
 export const CATALOG_DDL =
   "CREATE TABLE IF NOT EXISTS _pg_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL, pg_type TEXT NOT NULL, oid INTEGER NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY (table_name, column_name))";
 
 interface CatalogColumn { name: string; declared: string; type: PgType }
-type Catalog = Map<string, CatalogColumn[]>; // table -> columns in ordinal order
+type Catalog = Map<string, Array<CatalogColumn>>; // table -> columns in ordinal order
 
 export function loadCatalog(sql: SqlStorage): Catalog {
   const catalog: Catalog = new Map();
@@ -32,12 +34,12 @@ export function schemaOf(catalog: Catalog): Schema {
 const declaredOf = (dataType: DataType) => dataTypeSql(dataType) ?? "TEXT";
 
 type CatalogChange =
-  | { kind: "create"; table: string; ifNotExists: boolean; columns: { name: string; declared: string }[] }
-  | { kind: "drop"; tables: string[] }
+  | { kind: "create"; table: string; ifNotExists: boolean; columns: Array<{ name: string; declared: string }> }
+  | { kind: "drop"; tables: Array<string> }
   | { kind: "add"; table: string; column: string; declared: string }
   | { kind: "dropColumn"; table: string; column: string };
 
-export function changesOf(node: Expression): CatalogChange[] {
+export function changesOf(node: Expression): Array<CatalogChange> {
   if ("create_table" in node) {
     const c = node.create_table;
     const columns = c.columns.map((col) => ({ name: col.name.name, declared: declaredOf(col.data_type) }));
@@ -47,7 +49,7 @@ export function changesOf(node: Expression): CatalogChange[] {
   if ("alter_table" in node) {
     const table = node.alter_table.name.name.name;
     // Some actions are bare strings ("Force"); the ones that change columns are objects.
-    return node.alter_table.actions.flatMap((a): CatalogChange[] =>
+    return node.alter_table.actions.flatMap((a): Array<CatalogChange> =>
       typeof a !== "object" ? []
       : "AddColumn" in a ? [{ kind: "add", table, column: a.AddColumn.column.name.name, declared: declaredOf(a.AddColumn.column.data_type) }]
       : "DropColumn" in a ? [{ kind: "dropColumn", table, column: a.DropColumn.name.name }]
@@ -57,7 +59,7 @@ export function changesOf(node: Expression): CatalogChange[] {
   return [];
 }
 
-export function applyChanges(sql: SqlStorage, changes: CatalogChange[], existedBefore: (table: string) => boolean) {
+export function applyChanges(sql: SqlStorage, changes: Array<CatalogChange>, existedBefore: (table: string) => boolean) {
   for (const ch of changes) {
     if (ch.kind === "create") {
       if (ch.ifNotExists && existedBefore(ch.table)) continue;
@@ -89,8 +91,10 @@ function targetOf(node: Expression): TableRef | undefined {
   if ("delete" in node) return node.delete.table;
 }
 
-const returningOf = (node: Expression): Expression[] | undefined =>
+const returningOf = (node: Expression): Array<Expression> | undefined =>
   "insert" in node ? node.insert.returning : "update" in node ? node.update.returning : "delete" in node ? node.delete.returning : undefined;
+
+const tableOf = (e: Expression | null) => (e && "table" in e ? e.table : undefined);
 
 /** Tables a statement reads, by name and alias, for expanding `*` and `t.*`. */
 function tablesInScope(node: Expression): Map<string, string> {
@@ -100,7 +104,6 @@ function tablesInScope(node: Expression): Map<string, string> {
     scope.set(table.name.name, table.name.name);
     if (table.alias) scope.set(table.alias.name, table.name.name);
   };
-  const tableOf = (e: Expression | null) => (e && "table" in e ? e.table : undefined);
   if ("select" in node) {
     for (const from of node.select.from?.expressions ?? []) add(tableOf(from));
     for (const join of node.select.joins ?? []) add(tableOf(join.this));
@@ -142,11 +145,11 @@ function columnName(e: Expression): string {
  * The result columns of a SELECT or RETURNING, worked out without running it, or
  * undefined when they can't be (a set operation, or `*` over a table not in the catalog).
  */
-export function outputColumns(typed: Expression, catalog: Catalog): OutputColumn[] | undefined {
+export function outputColumns(typed: Expression, catalog: Catalog): Array<OutputColumn> | undefined {
   const outputs = "select" in typed ? typed.select.expressions : returningOf(typed);
   if (!outputs) return undefined;
   const scope = tablesInScope(typed);
-  const out: OutputColumn[] = [];
+  const out: Array<OutputColumn> = [];
   for (const e of outputs) {
     if (!("star" in e)) {
       out.push({ name: columnName(e), type: typeOf(e) });

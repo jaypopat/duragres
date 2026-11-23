@@ -10,18 +10,19 @@
 //
 // Any other randomness in a write inside a transaction fails with 0A000.
 import { PgError } from "../postgres/wire";
-import { findNodes, generate, parse, tokenize, type Expression, type Variant } from "./polyglot";
+import { findNodes, generate, parse, tokenize } from "./polyglot";
+import type { Expression, Variant } from "./polyglot";
 import type { Session } from "./session";
 import type { Statement } from "./statement";
 
 type Sql = Extract<Statement, { kind: "sql" }>;
 
 const DATE_FUNCTIONS = new Set(["date", "time", "datetime", "julianday", "strftime", "unixepoch", "timediff"]);
-const CLOCK_KEYWORDS: Record<string, (iso: string) => string> = {
-  current_timestamp: (iso) => iso,
-  current_date: (iso) => iso.slice(0, 10),
-  current_time: (iso) => iso.slice(11, 19),
-};
+const CLOCK_KEYWORDS = new Map<string, (iso: string) => string>([
+  ["current_timestamp", (iso) => iso],
+  ["current_date", (iso) => iso.slice(0, 10)],
+  ["current_time", (iso) => iso.slice(11, 19)],
+]);
 
 /** "2026-11-23 10:00:00.123": the UTC text format Duragres stores timestamps in. */
 const sqliteTime = (clock: number) => new Date(clock).toISOString().replace("T", " ").slice(0, 23);
@@ -39,7 +40,7 @@ export function freezeClock(sqlite: string, clock: number): string {
     at = end;
   };
   tokens.forEach((t, i) => {
-    const keyword = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? undefined : CLOCK_KEYWORDS[t.text.toLowerCase()];
+    const keyword = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? undefined : CLOCK_KEYWORDS.get(t.text.toLowerCase());
     if (keyword && tokens[i + 1]?.type !== "L_PAREN") return replace(t.start, t.end, quote(keyword(iso)));
     if (t.type === "STRING" && t.text.toLowerCase() === "now" && DATE_FUNCTIONS.has(enclosingFunction(tokens, i))) {
       replace(t.start, t.end, quote(iso));
@@ -71,7 +72,7 @@ export function materializeInsert(stmt: Sql, s: Session, clock: number): Sql {
   if (!("insert" in stmt.node)) return stmt;
   const insert = stmt.node.insert;
   const volatile = [...s.sql.exec<{ name: string; dflt_value: string | null }>("SELECT name, dflt_value FROM pragma_table_info(?)", insert.table.name.name)]
-    .filter((c) => c.dflt_value && VOLATILE_DEFAULT.test(c.dflt_value));
+    .flatMap(({ name, dflt_value: dflt }) => (dflt && VOLATILE_DEFAULT.test(dflt) ? [{ name, dflt }] : []));
   const usesUuid = insert.values.flat().some((v) => findNodes(v, isUuidCall).length > 0);
   if (!volatile.length && !usesUuid) return stmt;
   if (insert.query) throw new PgError("0A000", "duragres cannot keep volatile defaults of INSERT ... SELECT consistent inside a transaction");
@@ -81,7 +82,7 @@ export function materializeInsert(stmt: Sql, s: Session, clock: number): Sql {
   const rows = insert.values.length ? insert.values.map((row) => row.map(fixUuids)) : [[]];
   for (const column of volatile) {
     const at = columns.findIndex((c) => c.name === column.name);
-    const value = () => literal(s.sql.exec(`SELECT ${freezeClock(column.dflt_value!, clock)} AS v`).one().v);
+    const value = () => literal(s.sql.exec(`SELECT ${freezeClock(column.dflt, clock)} AS v`).one().v);
     if (at < 0) {
       columns.push(identifier(column.name));
       for (const row of rows) row.push(value());

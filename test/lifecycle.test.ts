@@ -2,7 +2,8 @@
 // against a Worker started with the short limits of `--env test` (cloudflare.config.ts).
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import pg from "pg";
-import { startServer, type Server } from "./server";
+import { startServer } from "./server";
+import type { Server } from "./server";
 
 const TTL_SECONDS = 30;
 const IDLE_SECONDS = 6;
@@ -15,8 +16,8 @@ beforeAll(async () => {
 afterAll(() => server?.stop());
 
 async function open(name: string) {
-  const notices: string[] = [];
-  const errors: (Error & { code?: string })[] = [];
+  const notices: Array<string> = [];
+  const errors: Array<Error & { code?: string }> = [];
   const c = new pg.Client(server.database(name));
   c.on("notice", (n) => notices.push(n.message ?? ""));
   c.on("error", (e) => errors.push(e));
@@ -74,14 +75,14 @@ test("the per-database connection cap refuses extras with 53300 and frees slots 
 });
 
 test("too many new connections from one address are refused with 53400", async () => {
-  let refused: (Error & { code?: string }) | undefined;
+  let refused: unknown;
   for (let i = 0; i < 50 && !refused; i++) {
     const c = new pg.Client(server.database(unique(`burst-${i}`)));
     try {
       await c.connect();
       await c.end();
-    } catch (e) {
-      refused = e as Error & { code?: string };
+    } catch (error) {
+      refused = error;
     }
   }
   expect(refused).toMatchObject({ code: "53400", message: expect.stringContaining("too many new connections") });

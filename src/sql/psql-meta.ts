@@ -1,11 +1,12 @@
 // Answers for the catalog queries psql 18 sends for \dt, \d <table> and \l.
 // The handlers match the exact queries psql sends (see them with `psql -E`).
 // Everything is derived from sqlite_master and pragma_table_info().
-import { OID, PgError, rows as table, type Result } from "../postgres/wire";
+import { OID, PgError, rows as table } from "../postgres/wire";
+import type { Result } from "../postgres/wire";
 import type { Session } from "./session";
 import { loadCatalog } from "./catalog";
 
-const OID_BASE = 16384; // first user OID in Postgres
+const OID_BASE = 16_384; // first user OID in Postgres
 const HIDDEN = /^(sqlite_|_cf_|__|_pg_|_duragres_)/; // SQLite internals, DO metadata, Miniflare's __miniflare_do_name, our shadow catalog
 
 interface Handler {
@@ -16,16 +17,17 @@ interface Handler {
 
 interface Rel { oid: number; name: string; kind: "r" | "i"; sql: string | null; tbl: string }
 
-function relations(s: Session): Rel[] {
+function relations(s: Session): Array<Rel> {
   return [...s.sql.exec("SELECT rowid, type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('table','index') ORDER BY rowid").raw()]
-    .map(([rowid, type, name, tbl, sql]) => ({ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? ("r" as const) : ("i" as const), sql: sql as string | null, tbl: String(tbl) }))
-    .filter((r) => !HIDDEN.test(r.name) && !HIDDEN.test(r.tbl));
+    .flatMap(([rowid, type, name, tbl, sql]): Array<Rel> =>
+      HIDDEN.test(String(name)) || HIDDEN.test(String(tbl)) ? []
+      : [{ oid: OID_BASE + Number(rowid), name: String(name), kind: type === "table" ? "r" : "i", sql: typeof sql === "string" ? sql : null, tbl: String(tbl) }]);
 }
 
 /** psql turns `\d users` into `c.relname OPERATOR(pg_catalog.~) '^(users)$'`. */
 function namePattern(q: string): RegExp | undefined {
   const m = /relname OPERATOR\(pg_catalog\.~\) '((?:[^']|'')*)'/.exec(q);
-  return m ? new RegExp(m[1].replace(/''/g, "'")) : undefined;
+  return m ? new RegExp(m[1].replaceAll('\'\'', "'")) : undefined;
 }
 
 function relByOid(q: string, s: Session): Rel | undefined {
@@ -46,7 +48,7 @@ function formatType(decl: string): string {
 
 interface Column { name: string; type: string; notnull: boolean; dflt: string | null; pk: boolean }
 
-function columns(s: Session, r: Rel): Column[] {
+function columns(s: Session, r: Rel): Array<Column> {
   const autoinc = /AUTOINCREMENT/i.test(r.sql ?? "");
   const declared = new Map((loadCatalog(s.sql).get(r.name) ?? []).map((c) => [c.name, c.type.name]));
   return [...s.sql.exec("SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info(?)", r.name).raw()].map(([name, type, nn, dflt, pk]) => {
@@ -55,7 +57,7 @@ function columns(s: Session, r: Rel): Column[] {
       name: String(name),
       type: declared.get(String(name)) ?? formatType(String(type)),
       notnull: Boolean(nn) || Boolean(pk),
-      dflt: serial ? `nextval('${r.name}_${name}_seq'::regclass)` : pgDefault(dflt as string | null),
+      dflt: serial ? `nextval('${r.name}_${name}_seq'::regclass)` : pgDefault(typeof dflt === "string" ? dflt : null),
       pk: Boolean(pk),
     };
   });
@@ -70,11 +72,11 @@ function pgDefault(d: string | null): string | null {
   return d;
 }
 
-interface Index { name: string; unique: boolean; primary: boolean; cols: string[] }
+interface Index { name: string; unique: boolean; primary: boolean; cols: Array<string> }
 
 /** Indexes as Postgres would name them: SQLite autoindexes become <table>_<col>_key / _pkey. */
-function indexes(s: Session, r: Rel): Index[] {
-  const out: Index[] = [];
+function indexes(s: Session, r: Rel): Array<Index> {
+  const out: Array<Index> = [];
   const pk = columns(s, r).filter((c) => c.pk).map((c) => c.name);
   const list = [...s.sql.exec("SELECT name, \"unique\", origin FROM pragma_index_list(?)", r.name).raw()];
   if (pk.length && !list.some(([, , origin]) => origin === "pk")) out.push({ name: `${r.name}_pkey`, unique: true, primary: true, cols: pk });
@@ -86,21 +88,23 @@ function indexes(s: Session, r: Rel): Index[] {
   return out.sort((a, b) => Number(b.primary) - Number(a.primary) || a.name.localeCompare(b.name));
 }
 
-interface ForeignKey { name: string; from: string; def: string }
+interface ForeignKey { name: string; from: string; to: string; def: string }
 
-function foreignKeys(s: Session, r: Rel): ForeignKey[] {
+function foreignKeys(s: Session, r: Rel): Array<ForeignKey> {
   const rows = [...s.sql.exec('SELECT id, "table", "from", "to" FROM pragma_foreign_key_list(?) ORDER BY id, seq', r.name).raw()];
   return rows.map(([, to, from, toCol]) => ({
     name: `${r.name}_${from}_fkey`,
     from: r.name,
     def: `FOREIGN KEY (${from}) REFERENCES ${to}(${toCol ?? "id"})`,
     to: String(to),
-  })) as (ForeignKey & { to: string })[];
+  }));
 }
 
-const HANDLERS: Handler[] = [
+const tf = (b: boolean) => (b ? "t" : "f");
+
+const HANDLERS: Array<Handler> = [
   {
-    name: "\\dt",
+    name: String.raw`\dt`,
     re: /FROM pg_catalog\.pg_class c[\s\S]*WHERE c\.relkind IN \('r','p',''\)/,
     run: (_m, s) => {
       const q = _m.input;
@@ -110,7 +114,7 @@ const HANDLERS: Handler[] = [
     },
   },
   {
-    name: "\\d lookup",
+    name: String.raw`\d lookup`,
     re: /^SELECT c\.oid,\s+n\.nspname,\s+c\.relname\s+FROM pg_catalog\.pg_class c/,
     run: (m, s) => {
       const pat = namePattern(m.input);
@@ -119,7 +123,7 @@ const HANDLERS: Handler[] = [
     },
   },
   {
-    name: "\\l",
+    name: String.raw`\l`,
     re: /FROM pg_catalog\.pg_database d/,
     run: (_m, s) =>
       table(
@@ -128,18 +132,18 @@ const HANDLERS: Handler[] = [
       ),
   },
   {
-    name: "\\d relation flags",
+    name: String.raw`\d relation flags`,
     re: /^SELECT c\.relchecks, c\.relkind, c\.relhasindex/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
       if (!r) return table([], [], "SELECT 0");
       const hasIndex = r.kind === "r" && indexes(s, r).length ? "t" : "f";
-      const cols: [string, number][] = ["relchecks", "relkind", "relhasindex", "relhasrules", "relhastriggers", "relrowsecurity", "relforcerowsecurity", "relhasoids", "relispartition", "?column?", "reltablespace", "reloftype", "relpersistence", "relreplident", "amname"].map((n) => [n, OID.text]);
+      const cols: Array<[string, number]> = ["relchecks", "relkind", "relhasindex", "relhasrules", "relhastriggers", "relrowsecurity", "relforcerowsecurity", "relhasoids", "relispartition", "?column?", "reltablespace", "reloftype", "relpersistence", "relreplident", "amname"].map((n) => [n, OID.text]);
       return table(cols, [[0, r.kind, hasIndex, "f", "f", "f", "f", "f", "f", "", 0, "", "p", "d", r.kind === "r" ? "heap" : "btree"]]);
     },
   },
   {
-    name: "\\d columns",
+    name: String.raw`\d columns`,
     re: /^SELECT a\.attname,\s+pg_catalog\.format_type\(a\.atttypid, a\.atttypmod\)/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
@@ -151,22 +155,21 @@ const HANDLERS: Handler[] = [
     },
   },
   {
-    name: "\\d indexes",
+    name: String.raw`\d indexes`,
     re: /^SELECT c2\.relname, i\.indisprimary, i\.indisunique/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
-      const cols: [string, number][] = ["relname", "indisprimary", "indisunique", "indisclustered", "indisvalid", "pg_get_indexdef", "pg_get_constraintdef", "contype", "condeferrable", "condeferred", "indisreplident", "reltablespace", "conperiod"].map((n) => [n, OID.text]);
-      const tf = (b: boolean) => (b ? "t" : "f");
-      const rows = (r ? indexes(s, r) : []).map((ix) => {
+      const cols: Array<[string, number]> = ["relname", "indisprimary", "indisunique", "indisclustered", "indisvalid", "pg_get_indexdef", "pg_get_constraintdef", "contype", "condeferrable", "condeferred", "indisreplident", "reltablespace", "conperiod"].map((n) => [n, OID.text]);
+      const rows = !r ? [] : indexes(s, r).map((ix) => {
         const constraint = ix.primary ? `PRIMARY KEY (${ix.cols.join(", ")})` : ix.name.endsWith("_key") ? `UNIQUE (${ix.cols.join(", ")})` : null;
-        const def = `CREATE ${ix.unique ? "UNIQUE " : ""}INDEX ${ix.name} ON public.${r!.name} USING btree (${ix.cols.join(", ")})`;
+        const def = `CREATE ${ix.unique ? "UNIQUE " : ""}INDEX ${ix.name} ON public.${r.name} USING btree (${ix.cols.join(", ")})`;
         return [ix.name, tf(ix.primary), tf(ix.unique), "f", "t", def, constraint, ix.primary ? "p" : constraint ? "u" : null, "f", "f", "f", 0, "f"];
       });
       return table(cols, rows);
     },
   },
   {
-    name: "\\d foreign keys",
+    name: String.raw`\d foreign keys`,
     re: /^SELECT true as sametable, conname,/,
     run: (m, s) => {
       const r = relByOid(m.input, s);
@@ -174,13 +177,13 @@ const HANDLERS: Handler[] = [
     },
   },
   {
-    name: "\\d referenced by",
+    name: String.raw`\d referenced by`,
     re: /^SELECT conname, conrelid::pg_catalog\.regclass AS ontable,[\s\S]*WHERE confrelid IN/,
     run: (m, s) => {
       const id = /pg_partition_ancestors\('(\d+)'\)/.exec(m.input)?.[1];
       const target = relations(s).find((r) => r.oid === Number(id));
       const rows = target
-        ? relations(s).filter((r) => r.kind === "r").flatMap((r) => (foreignKeys(s, r) as (ForeignKey & { to: string })[]).filter((fk) => fk.to === target.name).map((fk) => [fk.name, fk.from, fk.def]))
+        ? relations(s).filter((r) => r.kind === "r").flatMap((r) => foreignKeys(s, r).filter((fk) => fk.to === target.name).map((fk) => [fk.name, fk.from, fk.def]))
         : [];
       return table([["conname", OID.name], ["ontable", OID.text], ["condef", OID.text]], rows);
     },
@@ -188,7 +191,7 @@ const HANDLERS: Handler[] = [
   {
     // \d also asks for row-level policies, extended statistics, publications and table
     // inheritance. Duragres has none of these, so the true answer is no rows.
-    name: "\\d empty catalogs",
+    name: String.raw`\d empty catalogs`,
     re: /\bFROM pg_catalog\.(pg_policy|pg_statistic_ext|pg_publication|pg_class c, pg_catalog\.pg_inherits)\b/,
     run: () => table([], [], "SELECT 0"),
   },

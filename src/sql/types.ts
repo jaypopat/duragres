@@ -22,7 +22,7 @@ export const T = {
   jsonb: { oid: 3802, name: "jsonb" },
 } satisfies Record<string, PgType>;
 
-const BY_DECLARED: [RegExp, PgType][] = [
+const BY_DECLARED: Array<[RegExp, PgType]> = [
   [/^(SERIAL4?|INT4?|INTEGER)$/, T.int4],
   [/^(BIGSERIAL|SERIAL8|BIGINT|INT8)$/, T.int8],
   [/^(SMALLSERIAL|SERIAL2|SMALLINT|INT2)$/, T.int2],
@@ -42,9 +42,9 @@ const BY_DECLARED: [RegExp, PgType][] = [
 
 /** Declared Postgres type text (as Polyglot generates it, e.g. "VARCHAR(20)") -> type. Arrays and unknowns -> text. */
 export function typeFromDeclared(declared: string): PgType {
-  const d = declared.trim().toUpperCase().replace(/\s+/g, " ");
+  const d = declared.trim().toUpperCase().replaceAll(/\s+/g, " ");
   const hit = BY_DECLARED.find(([re]) => re.test(d))?.[1] ?? T.text;
-  const mods = /\(([\d,\s]+)\)$/.exec(d)?.[1]?.replace(/\s/g, "");
+  const mods = /\(([\d,\s]+)\)$/.exec(d)?.[1]?.replaceAll(/\s/g, "");
   return mods && (hit === T.varchar || hit === T.numeric) ? { ...hit, name: `${hit.name}(${mods})` } : hit;
 }
 
@@ -69,7 +69,7 @@ function formatTimestamp(v: string, withZone: boolean): string {
 /** SQLite value -> Postgres text format for the given type. */
 export function encodeValue(v: unknown, type: PgType): string | null {
   if (v === null || v === undefined) return null;
-  if (v instanceof ArrayBuffer) return "\\x" + [...new Uint8Array(v)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  if (v instanceof ArrayBuffer) return String.raw`\x` + [...new Uint8Array(v)].map((b) => b.toString(16).padStart(2, "0")).join("");
   switch (type.oid) {
     case T.bool.oid:
       return v === 1 || v === "1" || v === true || v === "t" || v === "true" ? "t" : v === 0 || v === "0" || v === false || v === "f" || v === "false" ? "f" : String(v);
@@ -83,7 +83,7 @@ export function encodeValue(v: unknown, type: PgType): string | null {
 }
 
 /** Text-format bound parameter -> value to bind in SQLite. */
-export function decodeParam(text: string | null, type: PgType | undefined): unknown {
+export function decodeParam(text: string | null, type: PgType | undefined): SqlStorageValue {
   if (text === null || !type) return text;
   switch (type.oid) {
     case T.bool.oid: {

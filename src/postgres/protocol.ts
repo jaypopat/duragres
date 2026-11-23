@@ -1,17 +1,20 @@
 // Post-authentication message handling: the simple query protocol (Q) and the
 // extended protocol (Parse/Bind/Describe/Execute/Sync) that drivers use for $n parameters.
-import { sqliteErrorToPg, type Params } from "../sql/exec";
+import { sqliteErrorToPg } from "../sql/exec";
+import type { Params } from "../sql/exec";
 import { findNodes } from "../sql/polyglot";
 import type { Session } from "../sql/session";
-import { prepare, type Statement } from "../sql/statement";
+import { prepare } from "../sql/statement";
+import type { Statement } from "../sql/statement";
 import { describeStatement, execute, txStatus } from "../sql/transactions";
-import { OID, PgError, Reader, decodeText, encodeResult, msg, type Field, type Result } from "./wire";
+import { OID, PgError, Reader, decodeText, encodeResult, msg } from "./wire";
+import type { Field, Result } from "./wire";
 
 // pg-gateway treats an empty iterable as "not handled" and falls back to its own
 // handler, so "reply with nothing" must be one zero-length chunk.
 const NOTHING = [new Uint8Array(0)];
 
-interface Prepared { stmt?: Statement; oids: number[] } // no stmt: an empty query
+interface Prepared { stmt?: Statement; oids: Array<number> } // no stmt: an empty query
 
 // A portal runs once, at its first Execute. Later Executes page through the rows
 // when the client asked for a row limit, then report zero rows.
@@ -33,7 +36,7 @@ export class Protocol {
   constructor(private s: Session) {}
 
   /** Returns response bytes, or undefined to let pg-gateway handle the message (Terminate). */
-  async handle(data: Uint8Array): Promise<Uint8Array[] | undefined> {
+  async handle(data: Uint8Array): Promise<Array<Uint8Array> | undefined> {
     const r = new Reader(data);
     if (r.type === "X") return undefined;
     if (r.type === "Q") return this.simple(r.cstr());
@@ -45,9 +48,9 @@ export class Protocol {
     if (this.failed) return NOTHING;
     try {
       return await this.extended(r);
-    } catch (e) {
+    } catch (error) {
       this.failed = true;
-      return [this.error(e)];
+      return [this.error(error)];
     }
   }
 
@@ -57,7 +60,7 @@ export class Protocol {
     return p;
   }
 
-  private rowDescription(fields: Field[] | null | undefined) {
+  private rowDescription(fields: Array<Field> | null | undefined) {
     return fields ? msg.rowDescription(fields) : msg.noData();
   }
 
@@ -71,20 +74,20 @@ export class Protocol {
     return msg.error(sqliteErrorToPg(e));
   }
 
-  private async simple(query: string): Promise<Uint8Array[]> {
-    const out: Uint8Array[] = [];
+  private async simple(query: string): Promise<Array<Uint8Array>> {
+    const out: Array<Uint8Array> = [];
     try {
       const statements = prepare(query, this.s);
       if (!statements.length) out.push(msg.emptyQuery());
       for (const stmt of statements) out.push(...encodeResult(await execute(stmt, [], this.s)));
-    } catch (e) {
-      out.push(this.error(e));
+    } catch (error) {
+      out.push(this.error(error));
     }
     out.push(this.ready());
     return out;
   }
 
-  private async extended(r: Reader): Promise<Uint8Array[]> {
+  private async extended(r: Reader): Promise<Array<Uint8Array>> {
     switch (r.type) {
       case "P": {
         const name = r.cstr();
@@ -120,7 +123,7 @@ export class Protocol {
           if (!prepared) throw new PgError("26000", `prepared statement "${name}" does not exist`);
           const n = parameterCount(prepared.stmt);
           const params = Array<null>(n).fill(null);
-          return [msg.parameterDescription(Array(n).fill(OID.text)), this.rowDescription(prepared.stmt && describeStatement(prepared.stmt, params, this.s, prepared.oids))];
+          return [msg.parameterDescription(Array<number>(n).fill(OID.text)), this.rowDescription(prepared.stmt && describeStatement(prepared.stmt, params, this.s, prepared.oids))];
         }
         const p = this.portal(name);
         return [this.rowDescription(p.result?.kind === "rows" ? p.result.fields : p.stmt && describeStatement(p.stmt, p.params, this.s, p.oids))];
@@ -129,7 +132,7 @@ export class Protocol {
         const p = this.portal(r.cstr());
         const maxRows = r.int32();
         if (!p.stmt) return [msg.emptyQuery()];
-        if (p.done) return [msg.commandComplete(zeroTag(p.result!))];
+        if (p.done && p.result) return [msg.commandComplete(zeroTag(p.result))];
         p.result ??= await execute(p.stmt, p.params, this.s, p.oids);
         if (p.result.kind !== "rows") {
           p.done = true;

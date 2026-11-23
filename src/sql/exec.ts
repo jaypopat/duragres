@@ -1,22 +1,25 @@
 // Runs one prepared statement on SQLite and builds its PostgreSQL result.
 // DDL and its shadow-catalog update commit together in one transactionSync.
-import { PgError, type Field, type Result } from "../postgres/wire";
+import { PgError } from "../postgres/wire";
+import type { Field, Result } from "../postgres/wire";
 import { annotate } from "./polyglot";
-import { applyChanges, changesOf, loadCatalog, outputColumns, paramTypes, returnsRows, schemaOf, type OutputColumn } from "./catalog";
+import { applyChanges, changesOf, loadCatalog, outputColumns, paramTypes, returnsRows, schemaOf } from "./catalog";
+import type { OutputColumn } from "./catalog";
 import { expandDefaults } from "./defaults";
 import { freezeClock, usesRandomness } from "./determinism";
 import { addConstraint } from "./rebuild";
-import { show, type Session } from "./session";
+import { show } from "./session";
+import type { Session } from "./session";
 import type { Statement } from "./statement";
 import { translate } from "./translate";
 import { T, decodeParam, encodeValue, inferType, typeByOid } from "./types";
 
 /** Statements that run synchronously against this database. */
 export type Runnable = Exclude<Statement, { kind: "transaction" | "isolation" | "createDatabase" | "dropDatabase" }>;
-export type Params = (string | null)[];
+export type Params = Array<string | null>;
 
 // SQLite error messages -> SQLSTATE. Anything unrecognised is an internal error, not a syntax error.
-const SQLITE_ERRORS: [RegExp, string, string][] = [
+const SQLITE_ERRORS: Array<[RegExp, string, string]> = [
   [/UNIQUE constraint failed/, "23505", "duplicate key value violates unique constraint"],
   [/NOT NULL constraint failed/, "23502", "null value violates not-null constraint"],
   [/FOREIGN KEY constraint failed/, "23503", "violates foreign key constraint"],
@@ -39,7 +42,7 @@ export function sqliteErrorToPg(e: unknown): PgError {
   return hit ? new PgError(hit[1], `${hit[2]} (${m})`) : new PgError("XX000", m);
 }
 
-export function run(stmt: Runnable, params: Params, s: Session, paramOids: number[] = []): Result {
+export function run(stmt: Runnable, params: Params, s: Session, paramOids: Array<number> = []): Result {
   try {
     switch (stmt.kind) {
       case "show":
@@ -54,26 +57,27 @@ export function run(stmt: Runnable, params: Params, s: Session, paramOids: numbe
       case "sql":
         return runSql(stmt, params, s, paramOids);
     }
-  } catch (e) {
-    throw sqliteErrorToPg(e);
+  } catch (error) {
+    throw sqliteErrorToPg(error);
   }
 }
 
 /** PostgreSQL `$n` -> SQLite `?n` (numbered, so reuse and reordering work). Skips string literals. */
-const numberParams = (sql: string) => sql.replace(/'(?:[^']|'')*'|\$(\d+)/g, (m, n) => (n ? `?${n}` : m));
+const numberParams = (sql: string) => sql.replaceAll(/'(?:[^']|'')*'|\$(\d+)/g, (m, n) => (n ? `?${n}` : m));
 
 /** SQLite wants exactly as many values as the highest ?n in the statement. */
 const highestParam = (sql: string) => Math.max(0, ...[...sql.matchAll(/'(?:[^']|'')*'|\?(\d+)/g)].map((m) => Number(m[1] ?? 0)));
 
-function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s: Session, paramOids: number[]): Result {
+function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s: Session, paramOids: Array<number>): Result {
   const catalog = loadCatalog(s.sql);
   const [typed] = annotate(stmt.pg, schemaOf(catalog));
   const inferred = paramTypes(typed, catalog);
   const params = rawParams.map((v, i) => decodeParam(v, typeByOid(paramOids[i] ?? 0) ?? inferred.get(i + 1)));
   let sqlite = (expandDefaults(stmt.node) ?? [stmt.pg]).flatMap(translate).map(numberParams);
-  if (stmt.clock !== undefined && !stmt.ddl) {
+  const clock = stmt.clock;
+  if (clock !== undefined && !stmt.ddl) {
     // DDL keeps 'now' in its defaults: they are evaluated when rows are inserted.
-    sqlite = sqlite.map((q) => freezeClock(q, stmt.clock!));
+    sqlite = sqlite.map((q) => freezeClock(q, clock));
     if (!stmt.readOnly && sqlite.some(usesRandomness)) {
       throw new PgError("0A000", "duragres cannot keep a random value consistent inside a transaction; generate it in the client or in INSERT ... VALUES");
     }
@@ -81,8 +85,8 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
 
   // A translation can be several SQLite statements; rows from all of them form the result.
   const execute = () => {
-    let names: string[] = [];
-    const rows: SqlStorageValue[][] = [];
+    let names: Array<string> = [];
+    const rows: Array<Array<SqlStorageValue>> = [];
     let changed = 0;
     for (const q of sqlite) {
       const cursor = s.sql.exec(q, ...params.slice(0, highestParam(q)));
@@ -119,9 +123,9 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
 }
 
 /** Result columns named and typed as Postgres would where known; other types are inferred from the values. */
-function rowsResult(columns: OutputColumn[], raw: unknown[][], tag: string): Result {
+function rowsResult(columns: Array<OutputColumn>, raw: Array<Array<unknown>>, tag: string): Result {
   const types = columns.map((c, i) => c.type ?? inferType(raw.find((r) => r[i] !== null && r[i] !== undefined)?.[i] ?? null));
-  const fields: Field[] = columns.map((c, i) => ({ name: c.name, oid: types[i].oid }));
+  const fields: Array<Field> = columns.map((c, i) => ({ name: c.name, oid: types[i].oid }));
   return { kind: "rows", fields, rows: raw.map((r) => r.map((v, i) => encodeValue(v, types[i]))), tag };
 }
 
@@ -130,7 +134,7 @@ function rowsResult(columns: OutputColumn[], raw: unknown[][], tag: string): Res
  * null when it returns no rows, undefined when they can only be learnt by running it.
  * A column whose type is unknown is described as text.
  */
-export function describe(stmt: Runnable, s: Session): Field[] | null | undefined {
+export function describe(stmt: Runnable, s: Session): Array<Field> | null | undefined {
   switch (stmt.kind) {
     case "show":
     case "catalog": {

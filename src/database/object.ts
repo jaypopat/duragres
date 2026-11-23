@@ -2,15 +2,17 @@ import { DurableObject } from "cloudflare:workers";
 import { PostgresConnection } from "pg-gateway";
 import { initPolyglot } from "../sql/polyglot";
 import { WriterLock } from "../sql/lock";
-import { SERVER_VERSION, type Databases, type Session } from "../sql/session";
+import { SERVER_VERSION } from "../sql/session";
+import type { Databases, Session } from "../sql/session";
 import { Protocol } from "../postgres/protocol";
-import { closeQuietly, refuse } from "../postgres/socket";
+import { byteStreams, closeQuietly, refuse } from "../postgres/socket";
 import { msg, PgError } from "../postgres/wire";
-import { capture, restore, type Snapshot } from "./snapshot";
+import { capture, restore } from "./snapshot";
+import type { Snapshot } from "./snapshot";
 import { createDatabase, createNotice, isLive, readMeta } from "./lifecycle";
 
 // ParameterStatus values psql/node-postgres look at, sent after AuthenticationOk.
-const STARTUP_PARAMS: [string, string][] = [
+const STARTUP_PARAMS: Array<[string, string]> = [
   ["server_encoding", "UTF8"], ["client_encoding", "UTF8"], ["DateStyle", "ISO, MDY"],
   ["integer_datetimes", "on"], ["standard_conforming_strings", "on"], ["TimeZone", "UTC"],
   ["application_name", ""], ["IntervalStyle", "postgres"], ["is_superuser", "on"],
@@ -66,16 +68,18 @@ export class PgDO extends DurableObject<Env> {
     // With allowHalfOpen the socket stays open after the client stops sending; treat
     // end of input as the end of the connection so its slot is freed immediately.
     const { promise: inputEnded, resolve: endInput } = Promise.withResolvers<void>();
-    const input = socket.readable.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ flush: () => endInput() }));
+    const streams = byteStreams(socket);
+    const input = streams.readable.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ flush: () => endInput() }));
 
     const conn: PostgresConnection = new PostgresConnection(
-      { readable: input, writable: socket.writable },
+      { readable: input, writable: streams.writable },
       {
         serverVersion: SERVER_VERSION,
         auth: { method: "trust" },
         onAuthenticated: async (state) => {
-          const writer = conn.streamWriter!;
-          const user = state.clientParams!.user;
+          const writer = conn.streamWriter;
+          const user = state.clientParams?.user;
+          if (!writer || user === undefined) throw new Error("pg-gateway authenticated a connection with no stream or user");
           for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
           session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock, databases: this.databases, isolation: "read committed" };

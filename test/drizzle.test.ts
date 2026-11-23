@@ -6,7 +6,7 @@ import { client, databaseUrl, freshDb } from "./setup";
 
 const EXAMPLE = "examples/drizzle";
 
-function run(args: string[], url: string) {
+function run(args: Array<string>, url: string) {
   const r = Bun.spawnSync(["bun", ...args], { cwd: EXAMPLE, env: { ...process.env, DATABASE_URL: url } });
   const out = r.stdout.toString() + r.stderr.toString();
   if (!r.success) throw new Error(out);
@@ -46,8 +46,8 @@ test("CREATE DATABASE ... TEMPLATE copies committed data, and the copy migrates 
 
     // A new migration applied only to the branch.
     const journalFile = Bun.file(join(migrations, "meta/_journal.json"));
-    const journal = await journalFile.json();
-    const previous = journal.entries.at(-1);
+    const journal: { entries: Array<{ idx: number; when: number; tag: string }> } = await journalFile.json();
+    const previous = journal.entries.at(-1)!;
     const next = { ...previous, idx: previous.idx + 1, when: previous.when + 1, tag: "0001_add_nickname" };
     journal.entries.push(next);
     await Bun.write(journalFile, JSON.stringify(journal));
@@ -88,7 +88,7 @@ test("CREATE and DROP DATABASE follow Postgres' rules", async () => {
 
     await elsewhere.query("CREATE TABLE t (v INT)");
     await expect(c.query(`DROP DATABASE "${other}"`)).rejects.toMatchObject({ code: "55006" });
-    const errors: unknown[] = [];
+    const errors: Array<unknown> = [];
     elsewhere.on("error", (e) => errors.push(e)); // the FATAL, then the closed socket
     await c.query(`DROP DATABASE "${other}" WITH (FORCE)`);
     await Bun.sleep(50);

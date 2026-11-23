@@ -1,7 +1,8 @@
 // Preloaded by bun test: one Worker for every test file. lifecycle.test.ts starts its own in test mode.
 import { afterAll, beforeAll } from "bun:test";
 import pg from "pg";
-import { startServer, type Server } from "./server";
+import { startServer } from "./server";
+import type { Server } from "./server";
 
 let server: Server;
 beforeAll(async () => {
@@ -22,7 +23,7 @@ export async function client(name: string) {
 }
 
 /** Every result of a multi-statement simple query (node-postgres returns an array for these). */
-export async function queryAll(c: pg.Client, sql: string): Promise<pg.QueryResult[]> {
-  const results: pg.QueryResult | pg.QueryResult[] = await c.query(sql);
+export async function queryAll(c: pg.Client, sql: string): Promise<Array<pg.QueryResult>> {
+  const results: pg.QueryResult | Array<pg.QueryResult> = await c.query(sql);
   return Array.isArray(results) ? results : [results];
 }

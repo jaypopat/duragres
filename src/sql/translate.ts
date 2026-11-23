@@ -13,9 +13,9 @@ const UUID_V4 =
 const SQLITE_TOKENS = /'(?:[^']|'')*'|"(?:[^"]|"")*"|\bDEFAULT\s+CURRENT_TIMESTAMP\b|\b(?:BIG|SMALL)?SERIAL\s+PRIMARY\s+KEY\b|\bUUID\(\)|\bCURRENT_TIMESTAMP\s*([+-])\s*INTERVAL\s+'(\d+)\s+(second|minute|hour|day|month|year)s?'/gi;
 
 function sqliteSyntax(sql: string): string {
-  return sql.replace(SQLITE_TOKENS, (token, sign, amount, unit) => {
+  return sql.replaceAll(SQLITE_TOKENS, (token: string, sign?: string, amount?: string, unit?: string) => {
     if (token.startsWith("'") || token.startsWith('"')) return token;
-    if (sign) return `datetime('now', '${sign}${amount} ${unit.toLowerCase()}')`;
+    if (sign) return `datetime('now', '${sign}${amount} ${unit?.toLowerCase()}')`;
     // Millisecond precision, so stored timestamps sort and round-trip like timestamptz.
     if (/^DEFAULT/i.test(token)) return "DEFAULT (strftime('%Y-%m-%d %H:%M:%f', 'now'))";
     if (/^UUID/i.test(token)) return UUID_V4;
@@ -23,4 +23,4 @@ function sqliteSyntax(sql: string): string {
   });
 }
 
-export const translate = (pg: string): string[] => transpile(pg).map(sqliteSyntax);
+export const translate = (pg: string): Array<string> => transpile(pg).map(sqliteSyntax);

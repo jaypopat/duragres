@@ -17,16 +17,19 @@
 //
 // After an error the transaction is aborted (25P02) until ROLLBACK/COMMIT, like
 // Postgres; the protocol marks it failed when any statement errors.
-import { PgError, type Field, type Result } from "../postgres/wire";
+import { PgError } from "../postgres/wire";
+import type { Field, Result } from "../postgres/wire";
 import { runDatabaseCommand } from "./databases";
 import { materializeInsert } from "./determinism";
-import { describe, run, type Params, type Runnable } from "./exec";
-import { lockedFromBegin, type Isolation, type Session } from "./session";
+import { describe, run } from "./exec";
+import type { Params, Runnable } from "./exec";
+import { lockedFromBegin } from "./session";
+import type { Isolation, Session } from "./session";
 import type { Statement } from "./statement";
 
-interface Write { stmt: Runnable; params: Params; oids: number[] }
+interface Write { stmt: Runnable; params: Params; oids: Array<number> }
 export interface Tx {
-  log: Write[];
+  log: Array<Write>;
   failed: boolean;
   startedAt: number;
   isolation: Isolation;
@@ -34,28 +37,29 @@ export interface Tx {
 }
 
 /** Thrown to make transactionSync roll back. */
-const ROLLBACK = Symbol("rollback");
+class Rollback extends Error {}
 
 /** Runs `fn` on the open transaction's uncommitted state, then rolls everything back. */
 function rolledBack<R>(s: Session, fn: () => R): R {
-  let value: R | undefined;
+  let result: { value: R } | undefined;
   try {
     inSync(s, () => {
       if (s.tx) replay(s, s.tx.log);
-      value = fn();
-      throw ROLLBACK;
+      result = { value: fn() };
+      throw new Rollback();
     });
-  } catch (e) {
-    if (e !== ROLLBACK) throw e;
+  } catch (error) {
+    if (!(error instanceof Rollback)) throw error;
   }
-  return value as R;
+  if (!result) throw new Error("unreachable: the rolled-back function did not run");
+  return result.value;
 }
 
 const aborted = () => new PgError("25P02", "current transaction is aborted, commands ignored until end of transaction block");
 
 const writes = (stmt: Runnable) => stmt.kind === "addConstraint" || (stmt.kind === "sql" && !stmt.readOnly);
 
-function replay(s: Session, log: Write[]) {
+function replay(s: Session, log: Array<Write>) {
   for (const w of log) run(w.stmt, w.params, s, w.oids);
 }
 
@@ -69,7 +73,7 @@ function inSync<R>(s: Session, fn: () => R): R {
   }
 }
 
-export async function execute(stmt: Statement, params: Params, s: Session, oids: number[] = []): Promise<Result> {
+export async function execute(stmt: Statement, params: Params, s: Session, oids: Array<number> = []): Promise<Result> {
   if (stmt.kind === "transaction") return stmt.op === "begin" ? begin(stmt.isolation, s) : end(stmt.op, s);
   if (stmt.kind === "isolation") return setIsolation(stmt, s);
   if (stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return runDatabaseCommand(stmt, s);
@@ -104,7 +108,7 @@ function deterministic(stmt: Runnable, s: Session, clock: number): Runnable {
  * RowDescription fields for a statement, seen from the open transaction, with no side
  * effects. Falls back to running it and rolling back when it can't be described statically.
  */
-export function describeStatement(stmt: Statement, params: Params, s: Session, oids: number[]): Field[] | null {
+export function describeStatement(stmt: Statement, params: Params, s: Session, oids: Array<number>): Array<Field> | null {
   if (stmt.kind === "transaction" || stmt.kind === "isolation" || stmt.kind === "createDatabase" || stmt.kind === "dropDatabase") return null;
   if (s.tx?.failed) throw aborted();
   const byRunning = () => {

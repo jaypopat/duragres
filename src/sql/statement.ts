@@ -6,11 +6,14 @@
 // queries are answered from their text; everything else is classified from its AST.
 // Rewrites are token edits on the original text, because Polyglot's PostgreSQL
 // generator is not lossless.
-import { PgError, type Result } from "../postgres/wire";
+import { PgError } from "../postgres/wire";
+import type { Result } from "../postgres/wire";
 import { QUERY_KINDS, isQuery } from "./catalog";
-import { findNodes, kindOf, parse, tokenize, type Expression, type Token } from "./polyglot";
+import { findNodes, kindOf, parse, tokenize } from "./polyglot";
+import type { Expression, Token } from "./polyglot";
 import { answerCatalogQuery } from "./psql-meta";
-import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting, type Isolation, type Session } from "./session";
+import { ISOLATION_LEVELS, SERVER_VERSION, checkSetting, isIsolation } from "./session";
+import type { Isolation, Session } from "./session";
 
 export type Statement =
   | { kind: "transaction"; op: "begin"; isolation?: Isolation }
@@ -26,8 +29,8 @@ export type Statement =
   // clock: inside a transaction, the start time every reading of the current time returns (determinism.ts)
   | { kind: "sql"; node: Expression; pg: string; tag: string; dml: boolean; ddl: boolean; readOnly: boolean; clock?: number };
 
-export function prepare(query: string, s: Session): Statement[] {
-  return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
+export function prepare(query: string, s: Session): Array<Statement> {
+  return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Array<Statement> => {
     const utility = classifyUtility(words, pg) ?? classifyDatabaseCommand(words, pg);
     if (utility) return [utility];
     if (readsCatalog) return [{ kind: "catalog", result: answerCatalogQuery(pg, s) }];
@@ -37,7 +40,7 @@ export function prepare(query: string, s: Session): Statement[] {
 }
 
 /** Classifies a statement by its first two keywords, upper-cased. */
-function classifyUtility([first, second = ""]: string[], pg: string): Statement | undefined {
+function classifyUtility([first, second = ""]: Array<string>, pg: string): Statement | undefined {
   switch (first) {
     case "BEGIN":
     case "START":
@@ -60,7 +63,7 @@ function classifyUtility([first, second = ""]: string[], pg: string): Statement 
 }
 
 /** The level after ISOLATION LEVEL in BEGIN, START TRANSACTION or SET TRANSACTION, if any. */
-function isolationLevel(tokens: Token[]): Isolation | undefined {
+function isolationLevel(tokens: Array<Token>): Isolation | undefined {
   const at = tokens.findIndex((t, i) => t.text.toUpperCase() === "ISOLATION" && tokens[i + 1]?.text.toUpperCase() === "LEVEL");
   if (at < 0) return undefined;
   const [a = "", b = ""] = tokens.slice(at + 2, at + 4).map((t) => t.text.toLowerCase());
@@ -69,12 +72,15 @@ function isolationLevel(tokens: Token[]): Isolation | undefined {
   return level;
 }
 
+/** SET TIME ZONE, NAMES and SCHEMA: the setting each one names, and how many tokens that takes. */
+const SET_SPECIAL_FORMS = new Map<string, [string, number]>([["TIME", ["timezone", 2]], ["NAMES", ["client_encoding", 1]], ["SCHEMA", ["search_path", 1]]]);
+
 /**
  * SET [SESSION | LOCAL] name {TO | =} value[, ...], plus the special forms TIME ZONE,
  * NAMES, SCHEMA, TRANSACTION and SESSION CHARACTERISTICS AS TRANSACTION.
  * `tokens` follow the SET keyword.
  */
-function classifySet(tokens: Token[]): Statement {
+function classifySet(tokens: Array<Token>): Statement {
   const word = (i: number) => tokens[i]?.text.toUpperCase();
   if (word(0) === "SESSION" && word(1) !== "CHARACTERISTICS" && word(1) !== "AUTHORIZATION") tokens = tokens.slice(1);
   else if (word(0) === "LOCAL") tokens = tokens.slice(1);
@@ -86,16 +92,15 @@ function classifySet(tokens: Token[]): Statement {
     return { kind: "isolation", scope: word(0) === "TRANSACTION" ? "transaction" : "session", level, tag: "SET" };
   }
 
-  const special: Record<string, [string, number]> = { TIME: ["timezone", 2], NAMES: ["client_encoding", 1], SCHEMA: ["search_path", 1] };
-  let [name, skip] = special[word(0) ?? ""] ?? ["", 0];
+  let [name, skip] = SET_SPECIAL_FORMS.get(word(0) ?? "") ?? ["", 0];
   if (!name) {
     // A name is identifiers joined by dots (custom settings are "prefix.name").
-    while (skip < tokens.length && !["TO", "="].includes(word(skip)!)) name += tokens[skip++].text.toLowerCase();
+    while (skip < tokens.length && !["TO", "="].includes(word(skip) ?? "")) name += tokens[skip++].text.toLowerCase();
     skip++; // TO or =
   }
   // The value: comma-separated items, each one or more tokens (strings arrive unquoted).
-  const items: string[] = [];
-  let item: string[] = [];
+  const items: Array<string> = [];
+  let item: Array<string> = [];
   for (const t of tokens.slice(skip)) {
     if (t.type === "COMMA") {
       items.push(item.join(" "));
@@ -106,7 +111,8 @@ function classifySet(tokens: Token[]): Statement {
   checkSetting(name, items);
   if (name === "transaction_isolation" || name === "default_transaction_isolation") {
     const level = items.join(" ").toLowerCase();
-    return { kind: "isolation", scope: name === "transaction_isolation" ? "transaction" : "session", level: level === "default" ? undefined : (level as Isolation), tag: "SET" };
+    // checkSetting accepted it, so it is a level or DEFAULT.
+    return { kind: "isolation", scope: name === "transaction_isolation" ? "transaction" : "session", level: isIsolation(level) ? level : undefined, tag: "SET" };
   }
   return { kind: "noop", tag: "SET" };
 }
@@ -115,11 +121,11 @@ function classifySet(tokens: Token[]): Statement {
  * CREATE DATABASE name [[WITH] TEMPLATE [=] template]
  * DROP DATABASE [IF EXISTS] name [[WITH] (FORCE)]
  */
-function classifyDatabaseCommand([first, second]: string[], pg: string): Statement | undefined {
+function classifyDatabaseCommand([first, second]: Array<string>, pg: string): Statement | undefined {
   if (second !== "DATABASE" || (first !== "CREATE" && first !== "DROP")) return undefined;
   const tokens = tokenize(pg).slice(2);
   const word = () => tokens[0]?.text.toUpperCase();
-  const take = (...expected: string[]) => {
+  const take = (...expected: Array<string>) => {
     if (!expected.includes(word() ?? "")) return false;
     tokens.shift();
     return true;
@@ -127,7 +133,7 @@ function classifyDatabaseCommand([first, second]: string[], pg: string): Stateme
   const name = () => {
     const t = tokens.shift();
     if (!isIdentifier(t)) throw new PgError("42601", `syntax error in ${first} DATABASE: expected a database name`);
-    return t!.type === "VAR" ? t!.text.toLowerCase() : t!.text; // unquoted names fold to lower case
+    return t.type === "VAR" ? t.text.toLowerCase() : t.text; // unquoted names fold to lower case
   };
   const end = () => {
     if (tokens.length) throw new PgError("0A000", `duragres does not support "${tokens[0].text}" in ${first} DATABASE`);
@@ -155,8 +161,8 @@ function classify(node: Expression, pg: string): Statement {
     // SQLite cannot add a constraint to a table; rebuild.ts recreates the table with it.
     const [action, ...rest] = node.alter_table.actions;
     if (!rest.length && typeof action === "object" && "AddConstraint" in action) {
-      const add = tokenize(pg).find((t) => t.type === "ADD")!;
-      return { kind: "addConstraint", table: node.alter_table.name.name.name, constraint: pg.slice(add.end).trim() };
+      const add = tokenize(pg).find((t) => t.type === "ADD");
+      if (add) return { kind: "addConstraint", table: node.alter_table.name.name.name, constraint: pg.slice(add.end).trim() };
     }
   }
   const dml = kind === "insert" || kind === "update" || kind === "delete";
@@ -166,7 +172,7 @@ function classify(node: Expression, pg: string): Statement {
 }
 
 /** "create_table" -> "CREATE TABLE"; every query reports SELECT. */
-const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.replace(/_/g, " ").toUpperCase());
+const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.replaceAll('_', " ").toUpperCase());
 
 // --- Splitting and rewriting
 
@@ -174,11 +180,11 @@ const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.re
 const FLAT_SCHEMAS = new Set(["public", "drizzle"]);
 
 /** Session functions SQLite lacks, and whether they are called with parentheses. */
-const SESSION_FUNCTIONS: Record<string, "call" | "bare" | "either"> = {
-  current_database: "call", version: "call", current_schema: "either", current_user: "bare", session_user: "bare", user: "bare",
-};
+const SESSION_FUNCTIONS = new Map<string, "call" | "bare" | "either">([
+  ["current_database", "call"], ["version", "call"], ["current_schema", "either"], ["current_user", "bare"], ["session_user", "bare"], ["user", "bare"],
+]);
 
-const isIdentifier = (t?: Token) => t?.type === "VAR" || t?.type === "QUOTED_IDENTIFIER";
+const isIdentifier = (t?: Token): t is Token => t?.type === "VAR" || t?.type === "QUOTED_IDENTIFIER";
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
 function sessionValue(fn: string, s: Session): string {
@@ -188,17 +194,17 @@ function sessionValue(fn: string, s: Session): string {
   return s.user;
 }
 
-interface Split { pg: string; words: string[]; readsCatalog: boolean }
+interface Split { pg: string; words: Array<string>; readsCatalog: boolean }
 
 /**
  * Non-empty statements of `query` with their first two keywords, flattened schema
  * qualifiers dropped and session functions replaced by their values.
  */
-function splitAndRewrite(query: string, s: Session): Split[] {
+function splitAndRewrite(query: string, s: Session): Array<Split> {
   const tokens = tokenize(query);
-  const statements: Split[] = [];
+  const statements: Array<Split> = [];
   let text = "";
-  let words: string[] = [];
+  let words: Array<string> = [];
   let readsCatalog = false;
   let at = tokens[0]?.start ?? 0; // query[at, edit) is copied verbatim before each edit
   const emit = (end: number, replacement: string) => {
@@ -225,7 +231,7 @@ function splitAndRewrite(query: string, s: Session): Split[] {
     if (words.length < 2) words.push(t.text.toUpperCase());
     // pg_catalog.current_database() and friends are session functions, rewritten below.
     const catalogName = tokens[i + 2]?.text.toLowerCase() ?? "";
-    if (isIdentifier(t) && t.text.toLowerCase() === "pg_catalog" && next?.type === "DOT" && !SESSION_FUNCTIONS[catalogName]) readsCatalog = true;
+    if (isIdentifier(t) && t.text.toLowerCase() === "pg_catalog" && next?.type === "DOT" && !SESSION_FUNCTIONS.has(catalogName)) readsCatalog = true;
 
     if (isIdentifier(t) && next?.type === "DOT" && prev?.type !== "DOT" && FLAT_SCHEMAS.has(t.text.toLowerCase())) {
       emit(t.start, "");
@@ -235,7 +241,7 @@ function splitAndRewrite(query: string, s: Session): Split[] {
     }
 
     const fn = t.type === "STRING" || t.type === "QUOTED_IDENTIFIER" ? "" : t.text.toLowerCase();
-    const style = SESSION_FUNCTIONS[fn];
+    const style = SESSION_FUNCTIONS.get(fn);
     const called = next?.type === "L_PAREN" && tokens[i + 2]?.type === "R_PAREN";
     // pg_catalog.current_database() is the same function; anything else qualified is not.
     const qualified = prev?.type === "DOT" && tokens[i - 2]?.text.toLowerCase() === "pg_catalog";

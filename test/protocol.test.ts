@@ -4,7 +4,7 @@ import { client, databaseUrl, freshDb, queryAll } from "./setup";
 import { frontend, open, types } from "./wire";
 
 test("the SQL corpus runs over the simple query protocol", async () => {
-  const sql = (await Bun.file("test/fixtures/demo.sql").text()).replace(/^--.*$/gm, "");
+  const sql = (await Bun.file("test/fixtures/demo.sql").text()).replaceAll(/^--.*$/gm, "");
   const statements = sql.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
   expect(statements).toHaveLength(27);
   const c = await client(freshDb("corpus"));
@@ -91,6 +91,11 @@ test("session functions, SHOW and SET are answered without SQLite support", asyn
     expect((await c.query("SHOW search_path")).rows).toEqual([{ search_path: '"$user", public' }]);
     expect((await c.query("SET client_min_messages TO warning")).command).toBe("SET");
     await expect(c.query("SHOW nonsense")).rejects.toMatchObject({ code: "42704" });
+    // Names from clients are never looked up on Object.prototype.
+    await expect(c.query("SHOW constructor")).rejects.toMatchObject({ code: "42704" });
+    await c.query("CREATE TABLE proto (constructor TEXT, n INT)");
+    await c.query("INSERT INTO proto VALUES ('a', 1)");
+    expect((await c.query("SELECT constructor FROM proto")).rows).toEqual([{ constructor: "a" }]);
     expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
   } finally {
     await c.end();

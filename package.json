@@ -8,9 +8,12 @@
   },
   "devDependencies": {
     "@cloudflare/config": "0.32.1",
+    "@cloudflare/oxlint-config": "0.2.0",
     "@types/bun": "^1.4.5",
     "@types/pg": "^8.23.1",
+    "oxlint": "^1.94.0",
     "pg": "8.23.1",
+    "tsrs": "^7.1.0-beta.tsrs2",
     "typescript": "7.0.2",
     "wrangler": "4.166.0"
   },
@@ -21,6 +24,7 @@
     "dev": "wrangler dev --experimental-new-config",
     "deploy": "wrangler deploy --experimental-new-config",
     "typecheck": "bun check && bun check -p test",
+    "lint": "oxlint .",
     "test": "bun test --timeout 90000"
   }
 }
