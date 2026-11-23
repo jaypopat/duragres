@@ -2,8 +2,10 @@
 // next to the SQLite tables. Polyglot annotates statements against it to type result
 // columns; parameters are typed from the column they are compared with or stored in.
 import type { Schema } from "@polyglot-sql/sdk/manual";
-import { dataTypeSql, findNodes, inferredType, kindOf, type Body, type DataType, type Expression } from "./polyglot";
-import { T, typeByOid, typeFromDeclared, type PgType } from "./types";
+import { dataTypeSql, findNodes, inferredType, kindOf } from './polyglot';
+import type { Body, DataType, Expression } from './polyglot';
+import { T, typeByOid, typeFromDeclared } from './types';
+import type { PgType } from './types';
 
 export const CATALOG_DDL =
   "CREATE TABLE IF NOT EXISTS _pg_columns (table_name TEXT NOT NULL, column_name TEXT NOT NULL, pg_type TEXT NOT NULL, oid INTEGER NOT NULL, ordinal INTEGER NOT NULL, PRIMARY KEY (table_name, column_name))";

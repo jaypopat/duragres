@@ -1,7 +1,8 @@
 // Preloaded by bun test: one Worker for every test file. lifecycle.test.ts starts its own in test mode.
 import { afterAll, beforeAll } from "bun:test";
 import pg from "pg";
-import { startServer, type Server } from "./server";
+import { startServer } from './server';
+import type { Server } from './server';
 
 let server: Server;
 beforeAll(async () => {
