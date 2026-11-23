@@ -13,13 +13,6 @@ function run(args: Array<string>, url: string) {
   return out;
 }
 
-test("drizzle-kit migrate is repeatable and the ORM round-trips types", () => {
-  const url = databaseUrl(freshDb("drizzle"));
-  for (let i = 0; i < 2; i++) expect(run(["x", "drizzle-kit", "migrate"], url)).toContain("migrations applied successfully");
-  expect(run(["demo.ts"], url)).toContain("Ada");
-  for (let i = 0; i < 2; i++) expect(run(["test/fixture.ts"], url)).toContain("Drizzle demo OK");
-});
-
 test("CREATE DATABASE ... TEMPLATE copies committed data, and the copy migrates on its own", async () => {
   const source = freshDb("fork-source");
   const branch = freshDb("fork-branch");

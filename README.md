@@ -54,7 +54,7 @@ bun run typecheck   # the Worker, then the tests
 bun run test        # starts its own Workers on ports 8787/8788 and 8797/8798
 ```
 
-Stop any dev server on those ports first. The psql test needs Docker.
+Stop any dev server on those ports first.
 
 `demo/` renders the demo video and records the GIF above. See `demo/record.ts`.
 
