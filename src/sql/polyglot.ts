@@ -4,9 +4,16 @@ import polyglot, { Dialect, findAll, getInferredType, type Schema, type TokenInf
 import wasmModule from "@polyglot-sql/sdk/polyglot_sql.wasm";
 import { PgError } from "../postgres/wire";
 
-/** Polyglot's AST is plain JSON; accessors in this directory keep the shape assumptions local. */
-// biome-ignore lint: untyped JSON at the Polyglot boundary
-export type Node = any;
+// The SDK exports functions over its AST types but not the types; recover them from the signatures.
+/** One AST node: an object with a single key naming its kind, e.g. `{ select: Select }`. */
+export type Expression = Extract<ReturnType<typeof polyglot.parse>, { success: true }>["ast"][number];
+/** The node of kind K, e.g. `Variant<"select">` is `{ select: Select }`. */
+export type Variant<K extends string> = Extract<Expression, Record<K, unknown>>;
+/** The body of a node of kind K, e.g. `Body<"select">` is `Select`. */
+export type Body<K extends string> = Variant<K>[K & keyof Variant<K>];
+export type DataType = Parameters<typeof polyglot.generateDataType>[0];
+
+export const kindOf = (node: Expression): string => Object.keys(node)[0];
 
 let ready: Promise<void> | undefined;
 export function initPolyglot(): Promise<void> {
@@ -29,27 +36,27 @@ export function tokenize(sql: string): Token[] {
 }
 
 /** PostgreSQL statements as AST nodes. */
-export const parse = (sql: string): Node[] => check(polyglot.parse(sql, Dialect.PostgreSQL)).ast as Node[];
+export const parse = (sql: string): Expression[] => check(polyglot.parse(sql, Dialect.PostgreSQL)).ast ?? [];
 
 /** Like parse, with each value-producing node annotated with its type from `schema`. */
-export const annotate = (sql: string, schema: Schema): Node[] => check(polyglot.annotateTypes(sql, Dialect.PostgreSQL, schema)).ast as Node[];
+export const annotate = (sql: string, schema: Schema): Expression[] => check(polyglot.annotateTypes(sql, Dialect.PostgreSQL, schema)).ast ?? [];
 
 /** PostgreSQL text for one statement node. Not lossless (SERIAL becomes an identity column), so only for rewritten DML. */
-export const generate = (node: Node): string => check(polyglot.generate([node], Dialect.PostgreSQL)).sql!.join(";\n");
+export const generate = (node: Expression): string => check(polyglot.generate([node], Dialect.PostgreSQL)).sql!.join(";\n");
 
 /** SQLite statements for one PostgreSQL statement. */
 export const transpile = (sql: string): string[] => check(polyglot.transpile(sql, Dialect.PostgreSQL, Dialect.SQLite)).sql ?? [];
 
 /** PostgreSQL spelling of a data type node, e.g. "TIMESTAMPTZ" or "VARCHAR(20)". */
-export function dataTypeSql(dataType: Node): string | undefined {
+export function dataTypeSql(dataType: DataType): string | undefined {
   const r = polyglot.generateDataType(dataType, Dialect.PostgreSQL);
   return r.success ? (r.sql ?? undefined) : undefined;
 }
 
 /** The type annotate() inferred for a node, as PostgreSQL type text. */
-export function inferredType(node: Node): string | undefined {
+export function inferredType(node: Expression): string | undefined {
   const type = getInferredType(node);
   return type ? dataTypeSql(type) : undefined;
 }
 
-export const findNodes = (node: Node, predicate: (n: Node) => boolean): Node[] => findAll(node, predicate);
+export const findNodes = (node: Expression, predicate: (n: Expression) => boolean): Expression[] => findAll(node, predicate);

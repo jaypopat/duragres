@@ -7,7 +7,8 @@
 // Rewrites are token edits on the original text, because Polyglot's PostgreSQL
 // generator is not lossless.
 import type { Result } from "../postgres/wire";
-import { findNodes, parse, tokenize, type Node, type Token } from "./polyglot";
+import { QUERY_KINDS, isQuery } from "./catalog";
+import { findNodes, kindOf, parse, tokenize, type Expression, type Token } from "./polyglot";
 import { answerCatalogQuery } from "./psql-meta";
 import { SERVER_VERSION, type Session } from "./session";
 
@@ -17,7 +18,7 @@ export type Statement =
   | { kind: "noop"; tag: string } // SET, RESET, DISCARD, CREATE/DROP SCHEMA: SQLite has no settings or schemas
   | { kind: "catalog"; result: Result }
   | { kind: "addConstraint"; table: string; constraint: string }
-  | { kind: "sql"; node: Node; pg: string; tag: string; dml: boolean; readOnly: boolean };
+  | { kind: "sql"; node: Expression; pg: string; tag: string; dml: boolean; readOnly: boolean };
 
 export function prepare(query: string, s: Session): Statement[] {
   return splitAndRewrite(query, s).flatMap(({ pg, words, readsCatalog }): Statement[] => {
@@ -51,31 +52,24 @@ function classifyUtility([first, second = ""]: string[]): Statement | undefined 
   }
 }
 
-function classify(node: Node, pg: string): Statement {
-  const kind = Object.keys(node)[0];
-  switch (kind) {
-    case "create_schema":
-    case "drop_schema":
-      return { kind: "noop", tag: commandTag(kind) };
-    case "alter_table": {
-      // SQLite cannot add a constraint to a table; rebuild.ts recreates the table with it.
-      const actions: Node[] = node.alter_table.actions ?? [];
-      if (actions.length === 1 && actions[0].AddConstraint) {
-        const add = tokenize(pg).find((t) => t.type === "ADD")!;
-        return { kind: "addConstraint", table: node.alter_table.name.name.name, constraint: pg.slice(add.end).trim() };
-      }
+function classify(node: Expression, pg: string): Statement {
+  const kind = kindOf(node);
+  if (kind === "create_schema" || kind === "drop_schema") return { kind: "noop", tag: commandTag(kind) };
+  if ("alter_table" in node) {
+    // SQLite cannot add a constraint to a table; rebuild.ts recreates the table with it.
+    const [action, ...rest] = node.alter_table.actions;
+    if (!rest.length && typeof action === "object" && "AddConstraint" in action) {
+      const add = tokenize(pg).find((t) => t.type === "ADD")!;
+      return { kind: "addConstraint", table: node.alter_table.name.name.name, constraint: pg.slice(add.end).trim() };
     }
   }
   const dml = kind === "insert" || kind === "update" || kind === "delete";
-  const writes = findNodes(node, (n) => n?.insert || n?.update || n?.delete);
-  const readOnly = QUERIES.has(kind) && !writes.length;
-  return { kind: "sql", node, pg, tag: commandTag(kind), dml, readOnly };
+  const writes = findNodes(node, (n) => "insert" in n || "update" in n || "delete" in n);
+  return { kind: "sql", node, pg, tag: commandTag(kind), dml, readOnly: isQuery(node) && !writes.length };
 }
 
-const QUERIES = new Set(["select", "values", "union", "intersect", "except"]);
-
 /** "create_table" -> "CREATE TABLE"; every query reports SELECT. */
-const commandTag = (kind: string) => (QUERIES.has(kind) ? "SELECT" : kind.replace(/_/g, " ").toUpperCase());
+const commandTag = (kind: string) => (QUERY_KINDS.has(kind) ? "SELECT" : kind.replace(/_/g, " ").toUpperCase());
 
 // --- Splitting and rewriting
 
