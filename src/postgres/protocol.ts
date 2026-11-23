@@ -22,7 +22,7 @@ const zeroTag = (r: Result) => (r.kind === "empty" ? "SELECT 0" : r.tag.replace(
 /** The number of $n parameters a statement takes. */
 function parameterCount(stmt?: Statement): number {
   if (stmt?.kind !== "sql") return 0;
-  return Math.max(0, ...findNodes(stmt.node, (n) => n?.parameter).map((n) => n.parameter.index));
+  return Math.max(0, ...findNodes(stmt.node, (n) => "parameter" in n).map((n) => ("parameter" in n ? (n.parameter.index ?? 0) : 0)));
 }
 
 export class Protocol {

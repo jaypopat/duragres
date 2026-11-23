@@ -19,23 +19,22 @@ import type { Statement } from "./statement";
 interface Write { stmt: Runnable; params: Params; oids: number[] }
 export interface Tx { log: Write[]; failed: boolean }
 
-/** Carries a value out of the transactionSync that is rolled back. */
-class Preview<R> {
-  constructor(readonly value: R) {}
-}
+/** Thrown to make transactionSync roll back. */
+const ROLLBACK = Symbol("rollback");
 
 /** Runs `fn` on the open transaction's uncommitted state, then rolls everything back. */
 function rolledBack<R>(s: Session, fn: () => R): R {
+  let value: R | undefined;
   try {
     inSync(s, () => {
       if (s.tx) replay(s, s.tx.log);
-      throw new Preview(fn());
+      value = fn();
+      throw ROLLBACK;
     });
   } catch (e) {
-    if (e instanceof Preview) return e.value as R;
-    throw e;
+    if (e !== ROLLBACK) throw e;
   }
-  throw new Error("unreachable: rolledBack always throws");
+  return value as R;
 }
 
 const aborted = () => new PgError("25P02", "current transaction is aborted, commands ignored until end of transaction block");

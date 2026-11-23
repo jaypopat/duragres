@@ -30,7 +30,7 @@ const SQLITE_ERRORS: [RegExp, string, string][] = [
 
 export function sqliteErrorToPg(e: unknown): PgError {
   if (e instanceof PgError) return e;
-  const m = String((e as Error)?.message ?? e).replace(/: SQLITE_\w+.*$/, "");
+  const m = (e instanceof Error ? e.message : String(e)).replace(/: SQLITE_\w+.*$/, "");
   const hit = SQLITE_ERRORS.find(([re]) => re.test(m));
   return hit ? new PgError(hit[1], `${hit[2]} (${m})`) : new PgError("XX000", m);
 }
@@ -71,11 +71,11 @@ function runSql(stmt: Extract<Statement, { kind: "sql" }>, rawParams: Params, s:
   // A translation can be several SQLite statements; rows from all of them form the result.
   const execute = () => {
     let names: string[] = [];
-    const rows: unknown[][] = [];
+    const rows: SqlStorageValue[][] = [];
     let changed = 0;
     for (const q of sqlite) {
       const cursor = s.sql.exec(q, ...params.slice(0, highestParam(q)));
-      const batch = [...cursor.raw()] as unknown[][];
+      const batch = [...cursor.raw()];
       if (cursor.columnNames.length) {
         names = cursor.columnNames;
         rows.push(...batch);
