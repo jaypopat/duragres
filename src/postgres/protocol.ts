@@ -2,7 +2,6 @@
 // extended protocol (Parse/Bind/Describe/Execute/Sync) that drivers use for $n parameters.
 import { sqliteErrorToPg, type Params } from "../sql/exec";
 import { findNodes, parse } from "../sql/polyglot";
-import { answerCatalogQuery } from "../sql/psql-meta";
 import type { Session } from "../sql/session";
 import { prepare } from "../sql/statement";
 import { execute, txStatus } from "../sql/transactions";
@@ -69,13 +68,9 @@ export class Protocol {
   private simple(query: string): Uint8Array[] {
     const out: Uint8Array[] = [];
     try {
-      const catalog = answerCatalogQuery(query, this.s);
-      if (catalog) out.push(...encodeResult(catalog));
-      else {
-        const statements = prepare(query, this.s);
-        if (!statements.length) out.push(msg.emptyQuery());
-        for (const stmt of statements) out.push(...encodeResult(execute(stmt, [], this.s)));
-      }
+      const statements = prepare(query, this.s);
+      if (!statements.length) out.push(msg.emptyQuery());
+      for (const stmt of statements) out.push(...encodeResult(execute(stmt, [], this.s)));
     } catch (e) {
       out.push(this.error(e));
     }
@@ -85,8 +80,6 @@ export class Protocol {
 
   /** One extended-protocol statement. */
   private run(p: Portal): Result {
-    const catalog = answerCatalogQuery(p.sql, this.s);
-    if (catalog) return catalog;
     const statements = prepare(p.sql, this.s);
     if (statements.length > 1) throw new PgError("42601", "cannot insert multiple commands into a prepared statement");
     return statements.length ? execute(statements[0], p.params, this.s, p.oids) : { kind: "empty" };
