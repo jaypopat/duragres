@@ -5,6 +5,8 @@
 //   pglite-fs.bin    PGlite's filesystem bundle: share/ and lib/ (Data import)
 //   seed.bin         an empty cluster, checkpointed at shutdown, with 1 MiB WAL segments (Data import)
 //   callback-N.wasm  the adapters Emscripten would compile at runtime, which Workers forbids
+//   <library>.wasm   Postgres libraries loaded with dlopen (PL/pgSQL, Snowball dictionaries), precompiled
+//                    by wrangler for the same reason; see LIBRARIES in src/engine/postgres.ts
 import { PGlite } from "@electric-sql/pglite";
 import { EmscriptenBuiltinFilesystem } from "@electric-sql/pglite/basefs";
 import { createHash } from "node:crypto";
@@ -39,6 +41,14 @@ fs.closeFs = async () => {
   await Bun.write(`${runtime}/seed.bin`, await fs.dumpTar("pgdata", "gzip"));
 };
 const db = await PGlite.create({ fs, initDbStartParams: ["--wal-segsize=1"] });
+// PGlite types Module.FS through Emscripten typings it does not ship, so check the one method used.
+const hasReadFile = (fs: unknown): fs is { readFile(path: string): Uint8Array } =>
+  typeof fs === "object" && fs !== null && "readFile" in fs && typeof fs.readFile === "function";
+const pgliteFs: unknown = db.Module.FS;
+if (!hasReadFile(pgliteFs)) throw new Error("PGlite's Module.FS has no readFile");
+for (const library of ["plpgsql", "dict_snowball"]) {
+  await Bun.write(`${runtime}/${library}.wasm`, pgliteFs.readFile(`/pglite/lib/postgresql/${library}.so`));
+}
 await db.close();
 
 await Bun.write(`${runtime}/stamp`, stamp);

@@ -77,3 +77,56 @@ test("a transaction left idle while others wait is ended with 25P03", async () =
     await Promise.allSettled([holder.end(), waiter.end()]);
   }
 });
+
+test("a client's temporary pg_authid cannot switch authentication off", async () => {
+  const name = freshDb("pool-shadow");
+  const owner = await client(name);
+  try {
+    await owner.query("ALTER ROLE demo PASSWORD 'secret'");
+    await owner.query("CREATE TEMP TABLE pg_authid (rolname name, rolpassword text, rolcanlogin bool, rolvaliduntil timestamptz)");
+  } finally {
+    await owner.end();
+  }
+  // Still password-protected: the server's lookups read pg_catalog.pg_authid, not the temp table.
+  await expect(new pg.Client(databaseUrl(name).replace("demo@", "demo:wrong@")).connect()).rejects.toMatchObject({ code: "28000" });
+  const back = new pg.Client(databaseUrl(name).replace("demo@", "demo:secret@"));
+  await back.connect();
+  await back.end();
+});
+
+test("a non-superuser client does not lock out new connections", async () => {
+  const name = freshDb("pool-nosuper");
+  const owner = await client(name);
+  try {
+    await owner.query("CREATE ROLE app LOGIN; GRANT ALL ON SCHEMA public TO app");
+    const app = new pg.Client(databaseUrl(name).replace("demo@", "app@"));
+    await app.connect();
+    await app.query("CREATE TABLE app_t (v int)");
+    await app.end();
+    // The server's own work (creating this role, auth lookups) runs as postgres, not as "app".
+    const later = new pg.Client(databaseUrl(name).replace("demo@", "newcomer@"));
+    await later.connect();
+    expect((await later.query("SELECT current_user AS u")).rows).toEqual([{ u: "newcomer" }]);
+    await later.end();
+  } finally {
+    await owner.end();
+  }
+});
+
+/** A 60-byte statement name: the pool's prefix would push it past Postgres's 63-byte limit. */
+const long = (tail: string) => `${"x".repeat(58)}${tail}`;
+
+test("statement names too long to prefix still do not collide", async () => {
+  const name = freshDb("pool-longnames");
+  const a = await client(name);
+  const b = await client(name);
+  try {
+    const [ra, rb] = await Promise.all([
+      a.query({ name: long("_a"), text: "SELECT 'a' AS v" }),
+      b.query({ name: long("_b"), text: "SELECT 'b' AS v" }),
+    ]);
+    expect([ra.rows, rb.rows]).toEqual([[{ v: "a" }], [{ v: "b" }]]);
+  } finally {
+    await Promise.all([a.end(), b.end()]);
+  }
+});

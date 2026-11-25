@@ -5,7 +5,7 @@
     "": {
       "name": "duragres",
       "dependencies": {
-        "@electric-sql/pglite": "file:engine/dist/electric-sql-pglite-0.6.0-duragres.1.tgz",
+        "@electric-sql/pglite": "file:engine/dist/electric-sql-pglite-0.6.0-duragres.2.tgz",
         "pg-gateway": "0.3.0-beta.4",
       },
       "devDependencies": {
@@ -57,7 +57,7 @@
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 
-    "@electric-sql/pglite": ["@electric-sql/pglite@engine/dist/electric-sql-pglite-0.6.0-duragres.1.tgz", {}, "sha512-pimZP85R9F+o5EPwcZu8LbtXWMb78Gcj1NgZ9AUjo7KJswcJjfpccUMyO+QSixBiRLWm00GUvREMtCmi30mCig=="],
+    "@electric-sql/pglite": ["@electric-sql/pglite@engine/dist/electric-sql-pglite-0.6.0-duragres.2.tgz", {}, "sha512-MBjYIJpUluG/YZxo13u8I+LsFHj+icR3fseNYi88MX+583s7vy5Z9CK2O6EimaaNiWud0UkjYDeKvRmiKHuoyA=="],
 
     "@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
 

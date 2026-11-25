@@ -8,8 +8,12 @@ const RESERVED = new Set(["template0", "template1"]); // Postgres's own, inside 
 export const validName = (name: string) => DB_NAME.test(name) && !RESERVED.has(name);
 export const NAME_RULE = 'duragres names: 3-63 chars, a-z 0-9 and "-", starting with a letter or digit; not template0 or template1';
 
-/** `importing` is set while CREATE DATABASE ... TEMPLATE copies another database into this one. */
-export interface Meta { name: string; createdAt: number; expiresAt: number; importing: boolean }
+/**
+ * `importing` is set while CREATE DATABASE ... TEMPLATE copies another database into this one. A copy
+ * records its `source` and the password verifiers it `inherited`: those protect the copy, but only a
+ * password set on the copy itself claims it (keeps it past its TTL).
+ */
+export interface Meta { name: string; createdAt: number; expiresAt: number; importing: boolean; source?: string; inherited?: Array<string> }
 
 const META_KEY = "duragres:meta";
 

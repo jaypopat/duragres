@@ -7,6 +7,8 @@ import { walInsertEnd } from "./wal";
 import pgliteWasmModule from "../../engine/runtime/pglite.wasm";
 import callback1 from "../../engine/runtime/callback-1.wasm";
 import callback2 from "../../engine/runtime/callback-2.wasm";
+import dictSnowball from "../../engine/runtime/dict_snowball.wasm";
+import plpgsql from "../../engine/runtime/plpgsql.wasm";
 import fsBundle from "../../engine/runtime/pglite-fs.bin";
 import seed from "../../engine/runtime/seed.bin";
 
@@ -51,6 +53,31 @@ function precompiledCallbacks(mod: { addFunction(fn: Callback, sig: string): num
   };
 }
 
+// Postgres dlopen()s these from $libdir, and Emscripten compiles the bytes it reads there, which Workers
+// forbid. Our build exposes the dynamic linker (engine/patches/postgres-pglite/0003), so register each
+// library as a lazy entry in its preloaded table: the first dlopen() links the module wrangler precompiled.
+// Nothing dlopen()s during boot, so registering after PGlite.create() is early enough.
+const LIBRARIES = new Map([["/pglite/lib/postgresql/plpgsql.so", plpgsql], ["/pglite/lib/postgresql/dict_snowball.so", dictSnowball]]);
+/** A linked side module's exports. Only Emscripten reads them; we hand them back unopened. */
+interface LinkedLibrary { readonly linked: unique symbol }
+interface Linker {
+  preloadedWasm: object;
+  loadWebAssemblyModule(binary: WebAssembly.Module, flags: { loadAsync: false; nodelete: true }, libName: string, localScope: Record<string, never>): LinkedLibrary;
+}
+const isLinker = (mod: Module): mod is Module & Linker =>
+  "preloadedWasm" in mod && typeof mod.preloadedWasm === "object" && mod.preloadedWasm !== null && "loadWebAssemblyModule" in mod && typeof mod.loadWebAssemblyModule === "function";
+function precompiledLibraries(mod: Module) {
+  if (!isLinker(mod)) throw new Error("this PGlite build does not expose its dynamic linker; build engine/ (bun run engine:build)");
+  for (const [path, module] of LIBRARIES) {
+    let linked: LinkedLibrary | undefined;
+    Object.defineProperty(mod.preloadedWasm, path, {
+      configurable: true,
+      enumerable: true,
+      get: () => (linked ??= mod.loadWebAssemblyModule(module, { loadAsync: false, nodelete: true }, path, {})),
+    });
+  }
+}
+
 /** Thrown when the engine itself failed: its memory state is gone and the object must restart. */
 export class EngineFailure extends Error {}
 
@@ -77,8 +104,7 @@ export class Postgres {
       const current = fs.database ?? "postgres";
       if (current !== name) await setup.exec(`ALTER DATABASE ${quoteIdent(current)} RENAME TO ${quoteIdent(name)}`);
       await setup.close();
-      fs.flush();
-      fs.database = name;
+      fs.flush(name); // the renamed catalog and the name it now holds commit together
       await storage.sync();
       fs = pageFs(storage);
     }
@@ -96,8 +122,6 @@ export class Postgres {
     let reply: Uint8Array;
     try {
       reply = await this.db.execProtocolRaw(message, { syncToFs: false });
-      // A client may have SET synchronous_commit = off; flush WAL through the last record anyway.
-      this.wal._XLogFlush(walInsertEnd(this.wal._GetXLogInsertRecPtr(), WAL_SEGMENT_BYTES));
     } catch (error) {
       throw new EngineFailure(`engine failure: ${String(error)}`, { cause: error });
     }
@@ -105,10 +129,15 @@ export class Postgres {
     return reply;
   }
 
-  /** SQL the server runs for itself, between client transactions. */
+  /** SQL the server runs for itself, between client transactions. A SQL error is thrown as is. */
   async exec(sql: string) {
     await this.db.exec(sql);
     await this.persist();
+  }
+
+  /** Stops Postgres (a shutdown checkpoint) before the object deletes its storage. */
+  async close() {
+    await this.db.close();
   }
 
   async query<T>(sql: string, params: Array<unknown> = []): Promise<Array<T>> {
@@ -123,9 +152,19 @@ export class Postgres {
     yield* exportChunks(this.storage.sql);
   }
 
+  /**
+   * Makes everything Postgres wrote durable: WAL through the last record (a client may have SET
+   * synchronous_commit = off), then the buffered pages. A failure here leaves committed state only in
+   * the engine's memory, so it is an engine failure: the object restarts and recovers from storage.
+   */
   private async persist() {
-    this.fs.flush();
-    await this.storage.sync();
+    try {
+      this.wal._XLogFlush(walInsertEnd(this.wal._GetXLogInsertRecPtr(), WAL_SEGMENT_BYTES));
+      this.fs.flush();
+      await this.storage.sync();
+    } catch (error) {
+      throw new EngineFailure(`engine failure while persisting: ${String(error)}`, { cause: error });
+    }
   }
 }
 
@@ -140,8 +179,8 @@ function pageFs(storage: DurableObjectStorage) {
   return fs;
 }
 
-function boot(fs: PageFs, database: string, seedIt: boolean) {
-  return PGlite.create({
+async function boot(fs: PageFs, database: string, seedIt: boolean) {
+  const db = await PGlite.create({
     pgliteWasmModule,
     fsBundle: new Blob([fsBundle]),
     loadDataDir: seedIt ? new Blob([seed]) : undefined,
@@ -152,6 +191,8 @@ function boot(fs: PageFs, database: string, seedIt: boolean) {
     postgresqlconf: CONF,
     startParams: START_PARAMS,
   });
+  precompiledLibraries(db.Module); // after create(): the linker is exposed once the module has loaded
+  return db;
 }
 
 export const quoteIdent = (s: string) => `"${s.replaceAll('"', '""')}"`;

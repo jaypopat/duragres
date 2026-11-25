@@ -1,0 +1,23 @@
+diff --git a/build-pglite.sh b/build-pglite.sh
+index b2f59d91a8..4ab27815c2 100755
+--- a/build-pglite.sh
++++ b/build-pglite.sh
+@@ -185,6 +185,7 @@ POSTGRES_PGLITE_FLAGS="\
+ -sEXPORTED_FUNCTIONS=@/install/pglite/exported_functions.txt \
+ -Wno-error=undefined \
+ $PGPRELOAD \
++--post-js $(pwd)/pglite/scripts/exposeDynamicLinker.js \
+ -lproxyfs.js -lnodefs.js -lidbfs.js"
+ 
+ # Building pglite itself needs to be the last step because of the PRELOAD_FILES parameter (a list of files and folders) need to be available.
+diff --git a/pglite/scripts/exposeDynamicLinker.js b/pglite/scripts/exposeDynamicLinker.js
+new file mode 100644
+index 0000000000..88448cd140
+--- /dev/null
++++ b/pglite/scripts/exposeDynamicLinker.js
+@@ -0,0 +1,5 @@
++// Duragres: expose Emscripten's dynamic linker so the host can supply side modules (plpgsql.so and
++// friends) as precompiled WebAssembly.Module objects. Cloudflare Workers forbid compiling Wasm at
++// runtime, and dlopen() otherwise compiles the library's bytes.
++Module["preloadedWasm"] = preloadedWasm;
++Module["loadWebAssemblyModule"] = loadWebAssemblyModule;

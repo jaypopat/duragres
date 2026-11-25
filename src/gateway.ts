@@ -63,9 +63,10 @@ export async function connect(socket: Socket, env: Env) {
   const startup = await readStartup(socket);
   if (!startup) return;
 
-  // Behind Spectrum, remoteAddress is the original client address.
-  const { remoteAddress = "" } = await socket.opened;
-  if (!(await env.CONNECT_LIMIT.limit({ key: hostOf(remoteAddress) })).success) {
+  // A direct connection carries the client's address. One forwarded by the duragres-tls Worker over its
+  // service binding does not, and that Worker already rate-limited it by the client's address.
+  const { remoteAddress } = await socket.opened;
+  if (remoteAddress && !(await env.CONNECT_LIMIT.limit({ key: hostOf(remoteAddress) })).success) {
     return refuse(socket, "53400", "duragres: too many new connections from this address, try again in a minute");
   }
 

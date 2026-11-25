@@ -1,0 +1,8 @@
+{
+  // The duragres-tls Worker. Env and runtime types are generated into tls/.cloudflare/types by wrangler dev.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "paths": { "cf/config": ["../node_modules/@cloudflare/config/dist/public.d.mts"] }
+  },
+  "include": ["src", ".cloudflare/types"]
+}

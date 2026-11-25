@@ -65,11 +65,22 @@ test("setting a password claims the database: it survives its TTL and connection
   await expect(new pg.Client(as("demo", "wrong")).connect()).rejects.toMatchObject(refused);
   await expect(new pg.Client(as("stranger", "correct horse")).connect()).rejects.toMatchObject(refused);
 
+  // A copy inherits the password, so it is protected too, but it is not claimed: it still expires.
+  const branch = unique("claim-branch");
+  const authed = new pg.Client(as("demo", "correct horse"));
+  await authed.connect();
+  await authed.query(`CREATE DATABASE "${branch}" TEMPLATE "${name}"`);
+  await authed.end();
+  await expect(new pg.Client(server.database(branch)).connect()).rejects.toThrow(/password must be a string/);
+
   await Bun.sleep((TTL_SECONDS + 3) * 1000);
   const back = new pg.Client(as("demo", "correct horse"));
   await back.connect();
   expect((await back.query("SELECT v FROM kept")).rows).toEqual([{ v: "mine" }]);
   await back.end();
+  const recreated = await open(branch); // expired and deleted, so connecting creates it afresh
+  expect(recreated.notices).toHaveLength(1);
+  await recreated.c.end();
 });
 
 test("invalid database names get FATAL 3D000", async () => {

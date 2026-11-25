@@ -2,6 +2,7 @@
 import { expect, test } from "bun:test";
 import { cp, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import pg from "pg";
 import { client, databaseUrl, freshDb } from "./setup";
 
 const EXAMPLE = "examples/drizzle";
@@ -88,5 +89,28 @@ test("CREATE and DROP DATABASE follow Postgres' rules", async () => {
     await again.end();
   } finally {
     await Promise.allSettled([c.end(), elsewhere.end()]);
+  }
+});
+
+test("a database with passwords can be dropped only from the database it was copied from", async () => {
+  const source = freshDb("protect-src");
+  const branch = freshDb("protect-branch");
+  const stranger = freshDb("protect-other");
+  const s = await client(source);
+  const other = await client(stranger);
+  try {
+    await s.query("ALTER ROLE demo PASSWORD 'secret'");
+    await s.end();
+    const authed = new pg.Client(databaseUrl(source).replace("demo@", "demo:secret@"));
+    await authed.connect();
+    await authed.query(`CREATE DATABASE "${branch}" TEMPLATE "${source}"`);
+    // The branch inherited the password, so knowing its name is not enough to drop it.
+    await expect(other.query(`DROP DATABASE "${branch}"`)).rejects.toMatchObject({ code: "42501" });
+    await expect(other.query(`DROP DATABASE "${source}"`)).rejects.toMatchObject({ code: "42501" });
+    // Its source, which you can only reach with the password, can drop it.
+    expect((await authed.query(`DROP DATABASE "${branch}"`)).command).toBe("DROP");
+    await authed.end();
+  } finally {
+    await Promise.allSettled([s.end(), other.end()]);
   }
 });

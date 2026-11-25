@@ -47,11 +47,48 @@ PGlite runs one Postgres backend per database. Duragres shares it between connec
 
 Code that holds a transaction on one connection and waits for a query on another, such as using `db` instead of `tx` inside a Drizzle transaction, waits until the 5-second rule ends the transaction.
 
+## TLS
+
+Production clients connect to the `duragres-tls` Worker in `tls/`, not to the `duragres` Worker. It negotiates TLS the way a Postgres server does, then forwards plaintext to `duragres` over a service binding:
+
+- A client that sends an SSLRequest, as node-postgres and libpq do, gets `S` and then a TLS handshake.
+- A client that starts with TLS directly (libpq 17's `sslnegotiation=direct`) gets one too, with the ALPN protocol `postgresql`.
+- A plaintext connection is refused with SQLSTATE 28000.
+
+Go's `crypto/tls` does the TLS work. `tls/main.go` compiles to WebAssembly because Workers have no server-side TLS. `duragres-tls` also rate-limits new connections per client IP, because `duragres` cannot see the client's address behind the service binding.
+
+To set it up for a hostname such as `db.example.com`:
+
+1. Get a certificate for the hostname, for example with certbot's Cloudflare DNS plugin:
+
+   ```sh
+   certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/cloudflare.ini -d db.example.com
+   ```
+
+2. Deploy both Workers and give `duragres-tls` the certificate. `deploy:tls` needs Go.
+
+   ```sh
+   bun run deploy
+   bun run deploy:tls
+   cd tls
+   bunx wrangler secret put TLS_CERT < /etc/letsencrypt/live/db.example.com/fullchain.pem
+   bunx wrangler secret put TLS_KEY < /etc/letsencrypt/live/db.example.com/privkey.pem
+   ```
+
+3. Create a Spectrum TCP application for `db.example.com` on port 5432 with the `duragres-tls` Worker as its origin. Leave Edge TLS Termination off, because the Worker negotiates TLS after the SSLRequest.
+
+Point Spectrum only at `duragres-tls`. The `duragres` Worker accepts plaintext and rate-limits only connections that carry a client address.
+
+Renew the certificate before it expires, every 90 days for Let's Encrypt, and put the new files with the same two commands.
+
+Clients then connect with `postgres://demo:<password>@db.example.com:5432/mydb?sslmode=verify-full`.
+
+To run TLS locally, put a certificate for `localhost` in `tls/.dev.vars` as `TLS_CERT="…"` and `TLS_KEY="…"` (PEM, with `\n` for line breaks). Run `bun run dev` and `bun run dev:tls`, then connect to port 8789. Locally, `duragres-tls` dials `duragres` on port 8788, because wrangler cannot run a TCP service binding between two dev processes.
+
 ## Limits
 
-- Connections are plaintext. Passwords travel as SCRAM-SHA-256 proofs, never in the clear, but queries and results do not.
 - `COPY ... FROM STDIN` fails with SQLSTATE 0A000. `COPY ... TO STDOUT` works.
-- Extensions that Postgres loads at runtime are not available yet, which includes PL/pgSQL.
+- PL/pgSQL and the Snowball full-text dictionaries are available. Other extensions are not.
 - A query that needs more than about 100 MiB of memory fails with SQLSTATE 53200, and the database keeps working.
 - Bulk inserts into large indexed tables are slow: about 24 seconds for 200,000 rows, deployed.
 
@@ -63,7 +100,7 @@ Code that holds a transaction on one connection and waits for a query on another
 - `postgres-pglite/0002-export-wal-insert-position.patch` exports `GetXLogInsertRecPtr`, so Duragres can flush the write-ahead log before every reply, even with `synchronous_commit = off`.
 - `pglite/0001-max-memory-option.patch` adds a `maxMemory` option, so a query that needs too much memory fails in Postgres instead of ending the isolate.
 
-The built package is committed as `engine/dist/electric-sql-pglite-0.6.0-duragres.1.tgz`, so `bun install` needs no build. To rebuild it after changing a patch or the lock:
+The built package is committed as `engine/dist/electric-sql-pglite-0.6.0-duragres.2.tgz`, so `bun install` needs no build. To rebuild it after changing a patch or the lock:
 
 ```sh
 bun run engine:build            # Docker; compiles Postgres and its extensions in PGlite's builder image
@@ -75,11 +112,11 @@ bun engine/build.ts --check     # also fails if the tarball differs from engine/
 ## Checks
 
 ```sh
-bun run typecheck   # the Worker, then the tests
-bun run test        # starts its own Workers on ports 8787/8788 and 8797/8798
+bun run typecheck   # both Workers, engine/'s scripts, then the tests
+bun run test        # starts its own Workers on ports 8787/8788, 8789/8790 (TLS) and 8797/8798
 ```
 
-Stop any dev server on those ports first.
+Stop any dev server on those ports first. The tests need Go (to build `tls/`) and openssl (for a test certificate).
 
 ## Configuration
 
@@ -94,3 +131,4 @@ New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit bind
 - `src/engine/postgres.ts` boots PGlite on `src/engine/page-fs.ts`, which stores Postgres's data directory as 8 KiB pages in SQLite. It makes each message's writes durable before the reply goes out.
 - `src/engine/pool.ts` shares the backend between connections.
 - `src/postgres/` reads and writes the few protocol messages Duragres handles itself.
+- `tls/` is the `duragres-tls` Worker: `src/index.ts` negotiates TLS, and `main.go` implements it with Go's `crypto/tls`.

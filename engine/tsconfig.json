@@ -1,0 +1,5 @@
+{
+  // engine/'s build scripts run in Bun, like the tests.
+  "extends": "../test/tsconfig.json",
+  "include": ["."]
+}

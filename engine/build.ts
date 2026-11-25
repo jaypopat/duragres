@@ -85,6 +85,7 @@ const declarations = await Promise.all([...new Bun.Glob("*.d.ts").scanSync(`${pk
 if (!declarations.some((d) => d.includes("maxMemory?: number"))) throw new Error("built types lack the maxMemory option");
 const code = await Promise.all([...new Bun.Glob("*.js").scanSync(`${pkg}/dist`)].map((f) => Bun.file(`${pkg}/dist/${f}`).text()));
 if (!code.some((c) => c.includes("maxMemory"))) throw new Error("built code lacks the maxMemory option");
+if (!code.some((c) => c.includes("preloadedWasm") && c.includes("loadWebAssemblyModule"))) throw new Error("built code does not expose the dynamic linker");
 
 // 6. Pack.
 await $`mkdir -p ${engine}/dist`;

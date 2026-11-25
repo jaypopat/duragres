@@ -110,15 +110,16 @@ export class PageFs extends BaseFilesystem {
     for (const [key, d] of this.dirty) if (d.node === n.id && d.page >= fromPage) this.dirty.delete(key);
   }
 
-  /** Writes buffered pages and file sizes to SQLite. Synchronous, so the DO commits it as one batch. */
-  flush() {
-    if (!this.dirty.size && !this.dirtyNodes.size) return;
+  /** Writes buffered pages and file sizes (and `database`, if given) to SQLite in one transaction. */
+  flush(database?: string) {
+    if (!this.dirty.size && !this.dirtyNodes.size && database === undefined) return;
     this.storage.transactionSync(() => {
       for (const d of this.dirty.values()) {
         this.stats.pageWrites++;
         this.sql.exec("INSERT OR REPLACE INTO fs_pages VALUES (?, ?, ?)", d.node, d.page, d.data);
       }
       for (const n of this.dirtyNodes) if (this.nodes.get(n.path) === n) this.save(n);
+      if (database !== undefined) this.database = database;
     });
     this.dirty.clear();
     this.dirtyNodes.clear();
@@ -217,22 +218,28 @@ export class PageFs extends BaseFilesystem {
     return length;
   }
 
+  // Structural changes (truncate, unlink, rmdir, rename) first flush the buffered pages, then apply
+  // as one transaction: Postgres writes a file and renames it into place expecting its contents durable,
+  // and a crash must never leave a file's size or name ahead of its pages.
+
   truncate(path: string, len = 0) {
     const n = this.node(path);
     if (isDir(n)) fail("EISDIR");
-    if (len < n.size) {
-      this.dropDirty(n, Math.ceil(len / PAGE));
-      this.sql.exec("DELETE FROM fs_pages WHERE node = ? AND page >= ?", n.id, Math.ceil(len / PAGE));
-      if (len % PAGE) {
-        const page = Math.floor(len / PAGE);
-        const bytes = this.readPage(n, page);
-        bytes.fill(0, len % PAGE);
-        this.writePage(n, page, bytes);
+    this.flush();
+    this.storage.transactionSync(() => {
+      if (len < n.size) {
+        this.sql.exec("DELETE FROM fs_pages WHERE node = ? AND page >= ?", n.id, Math.ceil(len / PAGE));
+        if (len % PAGE) {
+          const page = Math.floor(len / PAGE);
+          const bytes = this.readPage(n, page);
+          bytes.fill(0, len % PAGE);
+          this.sql.exec("INSERT OR REPLACE INTO fs_pages VALUES (?, ?, ?)", n.id, page, bytes);
+        }
       }
-    }
-    n.size = len;
-    n.mtime = Date.now();
-    this.save(n);
+      n.size = len;
+      n.mtime = Date.now();
+      this.save(n);
+    });
   }
 
   writeFile(path: string, data: string | Uint8Array, { mode = 0o600 } = {}) {
@@ -248,15 +255,18 @@ export class PageFs extends BaseFilesystem {
   unlink(path: string) {
     const n = this.node(path);
     if (isDir(n)) fail("EISDIR");
-    this.remove(n);
+    this.flush();
+    this.storage.transactionSync(() => this.remove(n));
   }
   rmdir(path: string) {
     const n = this.node(path);
     if (!isDir(n)) fail("ENOTDIR");
     if (n.path === "/") fail("EINVAL");
     if (this.readdir(n.path).length > 2) fail("ENOTEMPTY");
-    this.remove(n);
+    this.flush();
+    this.storage.transactionSync(() => this.remove(n));
   }
+  /** Deletes a node and its pages; callers run it inside a transaction. */
   private remove(n: Node) {
     // Open descriptors keep their Node object, so reads after unlink still see the pages until close;
     // the pages are deleted now, which Postgres never relies on.
@@ -274,17 +284,18 @@ export class PageFs extends BaseFilesystem {
     const n = this.node(from);
     if (!this.nodes.has(parentOf(to))) fail("ENOENT");
     const existing = this.nodes.get(to);
-    if (existing) {
-      if (isDir(existing)) this.rmdir(to);
-      else this.remove(existing);
-    }
-    const moved = [n, ...[...this.nodes.values()].filter((m) => m.path.startsWith(from + "/"))];
-    for (const m of moved) {
-      this.nodes.delete(m.path);
-      m.path = to + m.path.slice(from.length);
-      this.nodes.set(m.path, m);
-      this.save(m);
-    }
+    if (existing && isDir(existing) && this.readdir(to).length > 2) fail("ENOTEMPTY");
+    this.flush();
+    this.storage.transactionSync(() => {
+      if (existing) this.remove(existing);
+      const moved = [n, ...[...this.nodes.values()].filter((m) => m.path.startsWith(from + "/"))];
+      for (const m of moved) {
+        this.nodes.delete(m.path);
+        m.path = to + m.path.slice(from.length);
+        this.nodes.set(m.path, m);
+        this.save(m);
+      }
+    });
   }
 }
 

@@ -6,7 +6,7 @@ export const lock = {
   postgresPgliteCommit: "5ff171ef79498935854ddbdcfe9cb40456e309dd",
   builderImage: "electricsql/pglite-builder:6.0.13-3",
   builderImageDigest: "sha256:2b075d6b563fd15a913afed7948065d33c5e3b18e5922448f498d1f7664a7c36",
-  version: "0.6.0-duragres.1",
+  version: "0.6.0-duragres.2",
   /** SHA-256 of engine/dist/electric-sql-pglite-<version>.tgz; `bun engine/build.ts --check` compares it. */
-  sha256: "d6de4bcc829543b4aaba716d535ce1b48282020150f6a63bb0d88686f17a9e82",
+  sha256: "c97a9d8c02b23be6adcefe4867aed3b048c519a15d12a5e9f2abaa54ecaf2b71",
 } as const;
