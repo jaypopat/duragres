@@ -13,8 +13,8 @@ export default defineConfig({
     "unicorn/text-encoding-identifier-case": "off",
   },
   overrides: [
-    // The example and the demo recorder print what they do.
-    { files: ["examples/**", "demo/**"], rules: { "no-console": "off" } },
+    // The example, the demo recorder and the engine build scripts print what they do.
+    { files: ["examples/**", "demo/**", "engine/**"], rules: { "no-console": "off" } },
     // @cloudflare/config takes the Worker entrypoint as a module namespace (with { type: "cf-worker" }).
     // bun-types declares expect(...).rejects matchers as returning void; they return a promise that must be awaited.
     { files: ["test/**", "examples/drizzle/test/**"], rules: { "typescript/await-thenable": "off" } },

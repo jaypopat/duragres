@@ -1,6 +1,6 @@
 // TCP entry point. Reads the StartupMessage to learn the database name, then
 // pipes the connection to the Durable Object of that name. No SQL is parsed here.
-import { DB_NAME } from "./database/lifecycle";
+import { NAME_RULE, validName } from "./database/lifecycle";
 import { byteStreams, closeQuietly, refuse } from "./postgres/socket";
 
 const SSL_REQUEST = 80_877_103;
@@ -70,8 +70,8 @@ export async function connect(socket: Socket, env: Env) {
   }
 
   const database = startup.params.database || startup.params.user || "";
-  if (!DB_NAME.test(database)) {
-    return refuse(socket, "3D000", `database "${database}" does not exist (duragres names: 3-63 chars, a-z 0-9 and "-", starting with a letter or digit)`);
+  if (!validName(database)) {
+    return refuse(socket, "3D000", `database "${database}" does not exist (${NAME_RULE})`);
   }
 
   const upstream = env.PG.getByName(database).connect("pg:5432", { allowHalfOpen: true, secureTransport: "off" });

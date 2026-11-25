@@ -13,15 +13,16 @@ test("ROLLBACK undoes writes and DDL, COMMIT persists, and an error aborts the t
     await c.query("BEGIN");
     await c.query("INSERT INTO t (v) VALUES ('a'), ('b')");
     expect(await count()).toBe(2);
-    expect(await count(other)).toBe(0);
     await c.query("CREATE TABLE scratch (x INT)");
     await c.query("ROLLBACK");
     expect(await count()).toBe(0);
+    expect(await count(other)).toBe(0);
     await expect(c.query("SELECT * FROM scratch")).rejects.toThrow(/does not exist/);
 
     await c.query("BEGIN");
-    expect((await c.query("INSERT INTO t (v) VALUES ($1) RETURNING id", ["kept"])).rows).toEqual([{ id: 1 }]);
-    await c.query("UPDATE t SET v = 'kept2' WHERE id = 1");
+    // Sequences are not transactional: the rolled-back inserts used ids 1 and 2.
+    expect((await c.query("INSERT INTO t (v) VALUES ($1) RETURNING id", ["kept"])).rows).toEqual([{ id: 3 }]);
+    await c.query("UPDATE t SET v = 'kept2' WHERE id = 3");
     await c.query("COMMIT");
     expect((await other.query("SELECT v FROM t")).rows).toEqual([{ v: "kept2" }]);
 
@@ -82,44 +83,28 @@ test("a write waits for another connection's open write transaction", async () =
   }
 });
 
-test("read committed sees other commits until its first write; serializable runs alone", async () => {
-  const name = freshDb("tx-isolation");
+test("a reader waits for another connection's open transaction, then sees its commit", async () => {
+  // One backend serves every connection (transaction pooling), so another connection's statements
+  // wait while a transaction is open, instead of reading a snapshot as a full Postgres server would.
+  const name = freshDb("tx-wait");
   const a = await client(name);
   const b = await client(name);
-  const count = async () => Number((await a.query("SELECT COUNT(*) AS n FROM t")).rows[0].n);
   try {
     await a.query("CREATE TABLE t (id SERIAL PRIMARY KEY)");
-    await a.query("BEGIN");
-    expect((await a.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
-    expect(await count()).toBe(0);
-    await b.query("INSERT INTO t DEFAULT VALUES");
-    expect(await count()).toBe(1);
-    await a.query("COMMIT");
-
     await a.query("BEGIN ISOLATION LEVEL SERIALIZABLE");
     expect((await a.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "serializable" }]);
-    expect(await count()).toBe(1);
+    await a.query("INSERT INTO t DEFAULT VALUES");
     let bDone = false;
-    const bInsert = b.query("INSERT INTO t DEFAULT VALUES").then(() => (bDone = true));
+    const bCount = b.query("SELECT COUNT(*)::int AS n FROM t").then((r) => ((bDone = true), r));
     await Bun.sleep(200);
     expect(bDone).toBe(false);
-    expect(await count()).toBe(1);
     await a.query("COMMIT");
-    await bInsert;
-    expect(await count()).toBe(2);
-
-    // Raising the level after BEGIN works until the first query.
-    await a.query("BEGIN");
-    await a.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
-    expect((await a.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "repeatable read" }]);
-    await expect(a.query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")).rejects.toMatchObject({ code: "25001" });
-    await a.query("ROLLBACK");
+    expect((await bCount).rows).toEqual([{ n: 1 }]);
   } finally {
     await Promise.all([a.end(), b.end()]);
   }
 });
-
-test("a connection that disconnects mid-transaction releases the writer lock", async () => {
+test("a connection that disconnects mid-transaction is rolled back and frees the database", async () => {
   const name = freshDb("tx-drop");
   const a = await client(name);
   const b = await client(name);
@@ -132,19 +117,5 @@ test("a connection that disconnects mid-transaction releases the writer lock", a
     expect((await b.query("SELECT v FROM t")).rows).toEqual([{ v: 2 }]);
   } finally {
     await b.end();
-  }
-});
-
-test("randomness that can't be fixed is refused inside a transaction", async () => {
-  const c = await client(freshDb("tx-random"));
-  try {
-    await c.query("CREATE TABLE t (id INT, uid UUID)");
-    await c.query("INSERT INTO t VALUES (1, NULL), (2, NULL)");
-    await c.query("BEGIN");
-    await expect(c.query("UPDATE t SET uid = gen_random_uuid()")).rejects.toMatchObject({ code: "0A000" });
-    await c.query("ROLLBACK");
-    expect((await c.query("UPDATE t SET uid = gen_random_uuid()")).rowCount).toBe(2); // fine outside a transaction
-  } finally {
-    await c.end();
   }
 });

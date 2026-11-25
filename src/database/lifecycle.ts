@@ -1,31 +1,32 @@
-// Create-on-connect and TTL expiry. A database exists once its metadata is
-// written; the alarm set at creation deletes it unless it has been claimed.
-import { CATALOG_DDL } from "../sql/catalog";
+// Create-on-connect and TTL expiry. A database exists once its metadata is written; the alarm set at
+// creation deletes it unless it was claimed by then (a role has a password; see PgDO.claimed).
 
-export const DB_NAME = /^[a-z0-9][a-z0-9-]{2,62}$/;
+const DB_NAME = /^[a-z0-9][a-z0-9-]{2,62}$/;
+const RESERVED = new Set(["template0", "template1"]); // Postgres's own, inside every cluster
 
-interface Meta { name: string; createdAt: number; expiresAt: number; claimed: boolean }
+/** Duragres names: 3-63 chars, a-z 0-9 and "-", starting with a letter or digit, not template0/1. */
+export const validName = (name: string) => DB_NAME.test(name) && !RESERVED.has(name);
+export const NAME_RULE = 'duragres names: 3-63 chars, a-z 0-9 and "-", starting with a letter or digit; not template0 or template1';
+
+/** `importing` is set while CREATE DATABASE ... TEMPLATE copies another database into this one. */
+export interface Meta { name: string; createdAt: number; expiresAt: number; importing: boolean }
 
 const META_KEY = "duragres:meta";
 
 export const readMeta = (storage: DurableObjectStorage) => storage.kv.get<Meta>(META_KEY);
-
-export const isLive = (meta: Meta, now = Date.now()) => meta.claimed || now < meta.expiresAt;
+export const writeMeta = (storage: DurableObjectStorage, meta: Meta) => storage.kv.put(META_KEY, meta);
 
 /** Records a new database. Synchronous up to the alarm, so concurrent connects cannot both create it. */
-export function createDatabase(storage: DurableObjectStorage, name: string, ttlSeconds: number, withCatalog = true): Meta {
+export function createDatabase(storage: DurableObjectStorage, name: string, ttlSeconds: number, importing = false): Meta {
   const now = Date.now();
-  const meta: Meta = { name, createdAt: now, expiresAt: now + ttlSeconds * 1000, claimed: false };
-  storage.transactionSync(() => {
-    if (withCatalog) storage.sql.exec(CATALOG_DDL);
-    storage.kv.put(META_KEY, meta);
-  });
+  const meta: Meta = { name, createdAt: now, expiresAt: now + ttlSeconds * 1000, importing };
+  writeMeta(storage, meta);
   void storage.setAlarm(meta.expiresAt);
   return meta;
 }
 
 export function createNotice(name: string, ttlSeconds: number) {
-  return `duragres: created database "${name}" — expires in ${humanDuration(ttlSeconds)} unless claimed`;
+  return `duragres: created database "${name}" — deleted in ${humanDuration(ttlSeconds)} unless claimed with ALTER ROLE ... PASSWORD`;
 }
 
 function humanDuration(seconds: number): string {

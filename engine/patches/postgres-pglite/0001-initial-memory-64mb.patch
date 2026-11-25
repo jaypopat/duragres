@@ -1,0 +1,13 @@
+diff --git a/build-pglite.sh b/build-pglite.sh
+index b2f59d91a8..07648613c6 100755
+--- a/build-pglite.sh
++++ b/build-pglite.sh
+@@ -177,7 +177,7 @@ PGLITE_EXPORTED_RUNTIME_METHODS="NODEFS,MEMFS,IDBFS,FS,PROXYFS,setValue,getValue
+ POSTGRES_PGLITE_FLAGS="\
+ -sINCOMING_MODULE_JS_API=$INCOMING_MODULE_JS_API \
+ -sSTACK_SIZE=8MB \
+--sINITIAL_MEMORY=128MB \
++-sINITIAL_MEMORY=64MB \
+ -sALLOW_MEMORY_GROWTH \
+ -sIMPORTED_MEMORY=1 \
+ -sFAKE_DYLIBS=1 \

@@ -1,0 +1,26 @@
+diff --git a/packages/pglite/src/interface.ts b/packages/pglite/src/interface.ts
+index a25b66a..32b11a5 100644
+--- a/packages/pglite/src/interface.ts
++++ b/packages/pglite/src/interface.ts
+@@ -97,6 +97,8 @@ export interface PGliteOptions<TExtensions extends Extensions = Extensions> {
+   loadDataDir?: Blob | File
+   icuDataDir?: Blob | File
+   initialMemory?: number
++  /** Upper bound for the Wasm heap in bytes. Past it, allocations fail and Postgres raises 53200 out of memory. */
++  maxMemory?: number
+   pgliteWasmModule?: WebAssembly.Module
+   initdbWasmModule?: WebAssembly.Module
+   fsBundle?: Blob | File
+diff --git a/packages/pglite/src/pglite.ts b/packages/pglite/src/pglite.ts
+index b01f857..ab5eb3a 100644
+--- a/packages/pglite/src/pglite.ts
++++ b/packages/pglite/src/pglite.ts
+@@ -342,7 +342,7 @@ export class PGlite
+       initial: options.initialMemory
+         ? options.initialMemory / (64 * 1024)
+         : 2048,
+-      maximum: 32768,
++      maximum: options.maxMemory ? options.maxMemory / (64 * 1024) : 32768,
+     })
+ 
+     let emscriptenOpts: Partial<PostgresMod> = {

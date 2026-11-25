@@ -18,7 +18,6 @@ test("CREATE DATABASE ... TEMPLATE copies committed data, and the copy migrates 
   const branch = freshDb("fork-branch");
   const migrations = await mkdtemp(join(process.cwd(), EXAMPLE, ".fork-"));
   const parent = await client(source);
-  const pending = await client(source);
   let fork: Awaited<ReturnType<typeof client>> | undefined;
   try {
     await cp(join(EXAMPLE, "drizzle"), migrations, { recursive: true });
@@ -28,11 +27,9 @@ test("CREATE DATABASE ... TEMPLATE copies committed data, and the copy migrates 
     const baseline = (await parent.query(readUsers)).rows;
     expect(baseline).toHaveLength(4);
 
-    // Another connection's open transaction is not part of the copy.
-    await pending.query("BEGIN");
-    await pending.query("UPDATE users SET name = 'Pending source write' WHERE id = 1");
     expect((await parent.query(`CREATE DATABASE "${branch}" TEMPLATE "${source}"`)).command).toBe("CREATE");
-    await pending.query("COMMIT");
+    // Writes after the copy stay in the source.
+    await parent.query("UPDATE users SET name = 'Written after the copy' WHERE id = 1");
     fork = await client(branch);
     expect((await fork.query(readUsers)).rows).toEqual(baseline);
     expect((await fork.query("SELECT id FROM posts")).rowCount).toBe(3);
@@ -55,9 +52,9 @@ test("CREATE DATABASE ... TEMPLATE copies committed data, and the copy migrates 
     await fork.end();
     fork = undefined;
     expect((await parent.query(`DROP DATABASE "${branch}"`)).command).toBe("DROP");
-    expect((await parent.query(readUsers)).rows[0].name).toBe("Pending source write");
+    expect((await parent.query(readUsers)).rows[0].name).toBe("Written after the copy");
   } finally {
-    await Promise.allSettled([parent.end(), pending.end(), fork?.end()]);
+    await Promise.allSettled([parent.end(), fork?.end()]);
     await rm(migrations, { recursive: true, force: true });
   }
 });

@@ -1,0 +1,13 @@
+diff --git a/pglite/static/included.pglite.exports b/pglite/static/included.pglite.exports
+index 251a5342b1..fda68ee41c 100644
+--- a/pglite/static/included.pglite.exports
++++ b/pglite/static/included.pglite.exports
+@@ -565,4 +565,5 @@ wmemcmp
+ write
+ z_errmsg
+ zcalloc
+-zcfree
+\ No newline at end of file
++zcfree
++GetXLogInsertRecPtr
+\ No newline at end of file

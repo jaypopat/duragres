@@ -28,6 +28,8 @@ export async function startServer(mode: "default" | "test" = "default"): Promise
   const stop = async () => {
     proc.kill();
     await proc.exited;
+    // TEST_SERVER_LOG=<file> keeps wrangler's output, for when a test sees the server go away.
+    if (process.env.TEST_SERVER_LOG) await Bun.write(`${process.env.TEST_SERVER_LOG}.${mode}`, log);
     await rm(state, { recursive: true, force: true });
   };
   for (let i = 0; i < 300 && !log.includes(ready); i++) {

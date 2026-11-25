@@ -81,13 +81,13 @@ test("SQL-looking string values survive translation", async () => {
   }
 });
 
-test("session functions, SHOW and SET are answered without SQLite support", async () => {
+test("session functions, SHOW and SET", async () => {
   const name = freshDb("session");
   const c = await client(name);
   try {
     expect((await c.query("SELECT current_database(), upper(current_user) AS who, current_schema")).rows)
       .toEqual([{ current_database: name, who: "DEMO", current_schema: "public" }]);
-    expect((await c.query("SELECT version()")).rows[0].version).toStartWith("PostgreSQL 16.4");
+    expect((await c.query("SELECT version()")).rows[0].version).toStartWith("PostgreSQL 19");
     expect((await c.query("SHOW search_path")).rows).toEqual([{ search_path: '"$user", public' }]);
     expect((await c.query("SET client_min_messages TO warning")).command).toBe("SET");
     await expect(c.query("SHOW nonsense")).rejects.toMatchObject({ code: "42704" });
@@ -96,31 +96,6 @@ test("session functions, SHOW and SET are answered without SQLite support", asyn
     await c.query("CREATE TABLE proto (constructor TEXT, n INT)");
     await c.query("INSERT INTO proto VALUES ('a', 1)");
     expect((await c.query("SELECT constructor FROM proto")).rows).toEqual([{ constructor: "a" }]);
-    expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
-  } finally {
-    await c.end();
-  }
-});
-
-test("SET accepts what Duragres does and refuses what it can't", async () => {
-  const c = await client(freshDb("set"));
-  try {
-    for (const q of [
-      "SET TIME ZONE 'UTC'", "SET timezone = 'Etc/UTC'", "SET LOCAL TIME ZONE LOCAL", "SET search_path TO \"$user\", public",
-      "SET NAMES 'UTF8'", "SET DateStyle = ISO, MDY", "SET application_name = 'app'", "SET statement_timeout = 0", "SET search_path = DEFAULT",
-    ]) {
-      expect((await c.query(q)).command).toBe("SET");
-    }
-    for (const q of ["SET TIME ZONE 'America/New_York'", "SET search_path TO app", "SET client_encoding = 'LATIN1'", "SET DateStyle = 'German'"]) {
-      await expect(c.query(q)).rejects.toMatchObject({ code: "0A000" });
-    }
-    await expect(c.query("SET default_transaction_isolation = 'sometimes'")).rejects.toMatchObject({ code: "22023" });
-    await c.query("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE");
-    expect((await c.query("SHOW default_transaction_isolation")).rows).toEqual([{ default_transaction_isolation: "serializable" }]);
-    await c.query("BEGIN");
-    expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "serializable" }]);
-    await c.query("COMMIT");
-    await c.query("RESET ALL");
     expect((await c.query("SHOW transaction_isolation")).rows).toEqual([{ transaction_isolation: "read committed" }]);
   } finally {
     await c.end();
@@ -139,7 +114,7 @@ test("a simple query can hold several statements, comments, or nothing", async (
   }
 });
 
-test("utility statements Polyglot can't parse are still classified by keyword", async () => {
+test("utility statements report their command tags", async () => {
   const c = await client(freshDb("utility"));
   try {
     for (const q of ["SET TIME ZONE 'UTC'", "SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL SERIALIZABLE", "RESET ALL"]) {
@@ -194,11 +169,11 @@ test("Describe has no side effects, and Execute honours its row limit", async ()
   }
 });
 
-test("syntax errors surface at Parse, and unsupported catalog queries fail with 0A000", async () => {
+test("syntax errors surface at Parse, and the system catalogs are Postgres's own", async () => {
   const c = await client(freshDb("errors"));
   try {
     await expect(c.query("SELEC 1")).rejects.toMatchObject({ code: "42601" });
-    await expect(c.query("SELECT typname FROM pg_catalog.pg_type")).rejects.toMatchObject({ code: "0A000" });
+    expect((await c.query("SELECT typname FROM pg_catalog.pg_type WHERE typname = 'jsonb'")).rows).toEqual([{ typname: "jsonb" }]);
     expect((await c.query("SELECT 'pg_catalog.pg_type' AS s")).rows).toEqual([{ s: "pg_catalog.pg_type" }]);
   } finally {
     await c.end();

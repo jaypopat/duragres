@@ -31,7 +31,7 @@ const unique = (prefix: string) => `${prefix}-${Date.now().toString(36)}`;
 test("the first connect creates the database with a NOTICE, and the TTL deletes it", async () => {
   const name = unique("ttl");
   const first = await open(name);
-  expect(first.notices).toEqual([`duragres: created database "${name}" — expires in 30 seconds unless claimed`]);
+  expect(first.notices).toEqual([`duragres: created database "${name}" — deleted in 30 seconds unless claimed with ALTER ROLE ... PASSWORD`]);
   await first.c.query("CREATE TABLE notes (id SERIAL PRIMARY KEY, body TEXT)");
   await first.c.query("INSERT INTO notes (body) VALUES ('hello')");
   await first.c.end();
@@ -48,8 +48,32 @@ test("the first connect creates the database with a NOTICE, and the TTL deletes 
   await expired.c.end();
 });
 
+test("setting a password claims the database: it survives its TTL and connections must authenticate", async () => {
+  const name = unique("claim");
+  const owner = await open(name);
+  await owner.c.query("CREATE TABLE kept (v TEXT)");
+  await owner.c.query("INSERT INTO kept VALUES ('mine')");
+  await owner.c.query("ALTER ROLE demo PASSWORD 'correct horse'");
+  await owner.c.end();
+
+  // No password: the server asks for SCRAM, and node-postgres refuses to continue without one.
+  await expect(new pg.Client(server.database(name)).connect()).rejects.toThrow(/password must be a string/);
+  // The password goes in the URL: node-postgres lets a connection string override a separate password option.
+  const as = (user: string, password: string) => server.database(name).replace("demo@", `${user}:${encodeURIComponent(password)}@`);
+  // pg-gateway reports a failed SCRAM exchange as 28000; Postgres itself would say 28P01.
+  const refused = { code: "28000", severity: "FATAL", message: expect.stringContaining("password authentication failed") };
+  await expect(new pg.Client(as("demo", "wrong")).connect()).rejects.toMatchObject(refused);
+  await expect(new pg.Client(as("stranger", "correct horse")).connect()).rejects.toMatchObject(refused);
+
+  await Bun.sleep((TTL_SECONDS + 3) * 1000);
+  const back = new pg.Client(as("demo", "correct horse"));
+  await back.connect();
+  expect((await back.query("SELECT v FROM kept")).rows).toEqual([{ v: "mine" }]);
+  await back.end();
+});
+
 test("invalid database names get FATAL 3D000", async () => {
-  for (const bad of ["ab", "Upper", "under_score", "-leading", "x".repeat(64)]) {
+  for (const bad of ["ab", "Upper", "under_score", "-leading", "x".repeat(64), "template1"]) {
     await expect(new pg.Client(server.database(bad)).connect()).rejects.toMatchObject({ code: "3D000", severity: "FATAL" });
   }
 });

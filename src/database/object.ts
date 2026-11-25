@@ -1,35 +1,25 @@
 import { DurableObject } from "cloudflare:workers";
 import { PostgresConnection } from "pg-gateway";
-import { initPolyglot } from "../sql/polyglot";
-import { WriterLock } from "../sql/lock";
-import { SERVER_VERSION } from "../sql/session";
-import type { Databases, Session } from "../sql/session";
-import { Protocol } from "../postgres/protocol";
+import type { ScramSha256Data } from "pg-gateway";
+import { EngineFailure, Postgres } from "../engine/postgres";
+import { finishImport, importChunk } from "../engine/page-fs";
+import type { Chunk } from "../engine/page-fs";
+import { Pool } from "../engine/pool";
+import type { Client } from "../engine/pool";
+import { databaseCommand, sqlText } from "../postgres/messages";
+import type { DatabaseCommand } from "../postgres/messages";
 import { byteStreams, closeQuietly, refuse } from "../postgres/socket";
 import { msg, PgError } from "../postgres/wire";
-import { capture, restore } from "./snapshot";
-import type { Snapshot } from "./snapshot";
-import { createDatabase, createNotice, isLive, readMeta } from "./lifecycle";
-
-// ParameterStatus values psql/node-postgres look at, sent after AuthenticationOk.
-const STARTUP_PARAMS: Array<[string, string]> = [
-  ["server_encoding", "UTF8"], ["client_encoding", "UTF8"], ["DateStyle", "ISO, MDY"],
-  ["integer_datetimes", "on"], ["standard_conforming_strings", "on"], ["TimeZone", "UTC"],
-  ["application_name", ""], ["IntervalStyle", "postgres"], ["is_superuser", "on"],
-];
+import { createDatabase, createNotice, NAME_RULE, readMeta, validName, writeMeta } from "./lifecycle";
 
 type Terminate = (code: string, message: string) => Promise<void>;
+const COPY_FROM_STDIN = /^\s*copy\b[\s\S]*\bfrom\s+stdin\b/i;
 
 /** One Postgres database. Its name is the Durable Object name. */
 export class PgDO extends DurableObject<Env> {
   private connections = new Set<Terminate>();
   private deleting = false; // set while destroy() closes connections and deletes storage
-  private lock = new WriterLock();
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    void ctx.blockConcurrencyWhile(initPolyglot);
-  }
+  private engine?: Promise<{ pg: Postgres; pool: Pool }>;
 
   private get name() {
     const name = this.ctx.id.name;
@@ -37,19 +27,37 @@ export class PgDO extends DurableObject<Env> {
     return name;
   }
 
+  /** Postgres for this object, booted on first use. */
+  private start() {
+    return (this.engine ??= Postgres.open(this.ctx.storage, this.name).then((pg) => ({ pg, pool: new Pool(pg) })).catch((error: unknown) => {
+      this.engine = undefined;
+      throw error;
+    }));
+  }
+
+  /** The engine's memory state is lost; restart the object so the next request boots from storage. */
+  private fail(error: unknown): never {
+    if (error instanceof EngineFailure) this.ctx.abort(error.message);
+    throw error;
+  }
+
   /** One client connection. The gateway already answered SSLRequest and replays the StartupMessage. */
   async connect(socket: Socket): Promise<void> {
     const { ttlSeconds, idleSeconds, maxConnections } = this.env.LIMITS;
     if (this.deleting) return refuse(socket, "57P03", "duragres: the database is being deleted, try again");
     if (this.connections.size >= maxConnections) return refuse(socket, "53300", "sorry, too many clients already");
+    const meta = readMeta(this.ctx.storage);
+    if (meta?.importing) return refuse(socket, "57P03", "duragres: the database is still being copied, try again");
 
     const name = this.name;
-    const existing = readMeta(this.ctx.storage);
-    const created = !existing;
+    const created = !meta;
     if (created) createDatabase(this.ctx.storage, name, ttlSeconds);
+    const { pg, pool } = await this.start();
+    // A database is claimed once a role has a password (ALTER ROLE ... PASSWORD). From then on every
+    // connection authenticates with SCRAM against the verifier Postgres stored for its role.
+    const claimed = await this.claimed(pool, pg);
 
-    let session: Session | undefined;
-    let protocol: Protocol | undefined;
+    let client: Client | undefined;
     let idle: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
 
@@ -74,22 +82,27 @@ export class PgDO extends DurableObject<Env> {
     const conn: PostgresConnection = new PostgresConnection(
       { readable: input, writable: streams.writable },
       {
-        serverVersion: SERVER_VERSION,
-        auth: { method: "trust" },
+        auth: claimed
+          ? { method: "scram-sha-256", getScramSha256Data: ({ username }) => this.verifier(pool, pg, username) }
+          : { method: "trust" },
         onAuthenticated: async (state) => {
           const writer = conn.streamWriter;
           const user = state.clientParams?.user;
           if (!writer || user === undefined) throw new Error("pg-gateway authenticated a connection with no stream or user");
-          for (const [k, v] of [...STARTUP_PARAMS, ["session_authorization", user]]) await writer.write(msg.parameterStatus(k, v));
+          client = await pool.connect(user, (code, message) => void terminate(code, message));
+          for (const status of parameterStatus(pg, user, state.clientParams?.application_name ?? "")) await writer.write(status);
           if (created) await writer.write(msg.notice(createNotice(name, ttlSeconds)));
-          session = { sql: this.ctx.storage.sql, storage: this.ctx.storage, database: name, user, lock: this.lock, databases: this.databases, isolation: "read committed" };
-          protocol = new Protocol(session);
           touch();
         },
-        onMessage: (data, state) => {
-          if (!state.isAuthenticated || !protocol) return undefined;
+        onMessage: async (data, state) => {
+          if (!state.isAuthenticated || !client || data[0] === 0x58) return undefined; // pg-gateway handles Terminate
           touch();
-          return protocol.handle(data);
+          const sql = sqlText(data);
+          if (sql !== undefined) {
+            const refusal = await this.intercept(sql, data[0] === 0x51, client);
+            if (refusal) return refusal;
+          }
+          return client.send(data).catch((error: unknown) => this.fail(error));
         },
       },
     );
@@ -104,53 +117,86 @@ export class PgDO extends DurableObject<Env> {
       closed = true;
       clearTimeout(idle);
       this.connections.delete(terminate);
-      // A connection that goes away mid-transaction rolls it back, which frees the lock.
-      if (session) this.lock.release(session);
+      await client?.close().catch((error: unknown) => this.fail(error));
     }
   }
 
-  /** Expiry: unclaimed databases are deleted when their TTL alarm fires. */
-  async alarm() {
-    const meta = readMeta(this.ctx.storage);
-    if (!meta) return;
-    if (isLive(meta)) {
-      if (!meta.claimed) await this.ctx.storage.setAlarm(meta.expiresAt);
-      return;
-    }
-    await this.destroy("57P01", `duragres: database "${meta.name}" expired and was deleted`);
-  }
-
-  /** Closes every connection and deletes all storage, refusing new connections meanwhile. */
-  private async destroy(code: string, message: string) {
-    this.deleting = true;
+  /**
+   * Statements Duragres answers instead of Postgres: CREATE/DROP DATABASE (other objects) and
+   * COPY FROM STDIN (PGlite reads COPY data from the command's own input, so it would exit).
+   * Returns the reply, or undefined to send the message to Postgres.
+   */
+  private async intercept(sql: string, simple: boolean, client: Client): Promise<Uint8Array | undefined> {
+    let command: DatabaseCommand | undefined;
     try {
-      await Promise.all([...this.connections].map((terminate) => terminate(code, message)));
-      await this.ctx.storage.deleteAll();
-    } finally {
-      this.deleting = false;
+      if (COPY_FROM_STDIN.test(sql)) throw new PgError("0A000", "COPY FROM STDIN is not supported; use INSERT, or COPY FROM a file");
+      command = databaseCommand(sql);
+      if (!command) return undefined;
+      if (!simple) throw new PgError("0A000", `${command.kind === "create" ? "CREATE" : "DROP"} DATABASE must be sent as a simple query`);
+      if (client.status() !== "I") throw new PgError("25001", `${command.kind === "create" ? "CREATE" : "DROP"} DATABASE cannot run inside a transaction block`);
+      const tag = await this.runDatabaseCommand(command);
+      return reply(msg.commandComplete(tag), msg.readyForQuery("I"));
+    } catch (error) {
+      if (!(error instanceof PgError)) throw error;
+      return simple ? reply(msg.error(error), msg.readyForQuery(client.status())) : msg.error(error);
     }
   }
 
-  /** CREATE/DROP DATABASE run by a connection to this database, on another one. */
-  private databases: Databases = {
-    create: async (name, copy) => {
-      // Bounds how fast one database can spawn branches.
-      if (!(await this.env.CONNECT_LIMIT.limit({ key: `create:${this.name}` })).success) {
-        throw new PgError("53400", "duragres: too many new databases from this one, try again in a minute");
-      }
-      return this.env.PG.getByName(name).create(copy ? capture(this.ctx.storage) : null);
-    },
-    drop: (name, force) => this.env.PG.getByName(name).drop(force),
-  };
+  // --- CREATE DATABASE ... TEMPLATE and DROP DATABASE, run on another object.
+  // Knowing a database's name is what lets you connect to it, so it is also what lets you drop it;
+  // copying one requires being connected to it.
+
+  private async runDatabaseCommand(command: DatabaseCommand): Promise<string> {
+    if (!validName(command.name)) {
+      throw new PgError("42602", `invalid database name "${command.name}" (${NAME_RULE})`);
+    }
+    const target = this.env.PG.getByName(command.name);
+    if (command.kind === "drop") {
+      if (command.name === this.name) throw new PgError("55006", "cannot drop the currently open database");
+      const outcome = await target.drop(command.force);
+      if (outcome === "missing" && !command.ifExists) throw new PgError("3D000", `database "${command.name}" does not exist`);
+      if (outcome === "in-use") throw new PgError("55006", `database "${command.name}" is being accessed by other users; use DROP DATABASE ... WITH (FORCE)`);
+      return "DROP DATABASE";
+    }
+
+    if (command.template !== undefined && command.template !== this.name) {
+      throw new PgError("0A000", `connect to "${command.template}" to use it as a template`);
+    }
+    // Bounds how fast one database can spawn others.
+    if (!(await this.env.CONNECT_LIMIT.limit({ key: `create:${this.name}` })).success) {
+      throw new PgError("53400", "duragres: too many new databases from this one, try again in a minute");
+    }
+    if ((await target.reserve(command.template !== undefined)) === "exists") throw new PgError("42P04", `database "${command.name}" already exists`);
+    if (command.template !== undefined) {
+      const { pg, pool } = await this.start();
+      // Holding the backend keeps every client out until the copy is complete and consistent.
+      await pool.hold(async () => {
+        for await (const chunk of pg.chunks()) await target.receive(chunk);
+      });
+      await target.finish(this.name);
+    }
+    return "CREATE DATABASE";
+  }
 
   // --- RPC from other databases
 
-  /** Creates this database, empty or from another database's snapshot. */
-  async create(snapshot: Snapshot | null): Promise<"created" | "exists"> {
+  /** Creates this database: empty now, or marked as importing until a copy arrives. */
+  async reserve(copy: boolean): Promise<"created" | "exists"> {
     if (readMeta(this.ctx.storage)) return "exists";
-    if (snapshot) restore(this.ctx.storage, snapshot);
-    createDatabase(this.ctx.storage, this.name, this.env.LIMITS.ttlSeconds, !snapshot);
+    createDatabase(this.ctx.storage, this.name, this.env.LIMITS.ttlSeconds, copy);
     return "created";
+  }
+
+  /** One chunk of another database's data directory. */
+  async receive(chunk: Chunk) {
+    importChunk(this.ctx.storage, chunk);
+  }
+
+  /** The copy is complete; `source` is the Postgres database name inside it, renamed on first boot. */
+  async finish(source: string) {
+    finishImport(this.ctx.storage, source);
+    const meta = readMeta(this.ctx.storage);
+    if (meta) writeMeta(this.ctx.storage, { ...meta, importing: false });
   }
 
   /** Deletes this database. It is in use while it has connections, unless `force` closes them. */
@@ -160,4 +206,55 @@ export class PgDO extends DurableObject<Env> {
     await this.destroy("57P01", "terminating connection due to administrator command");
     return "dropped";
   }
+
+  /** Expiry: databases nobody claimed are deleted when their TTL alarm fires. */
+  async alarm() {
+    const meta = readMeta(this.ctx.storage);
+    if (!meta) return;
+    if (Date.now() < meta.expiresAt) return void (await this.ctx.storage.setAlarm(meta.expiresAt));
+    if (!meta.importing) {
+      const { pg, pool } = await this.start();
+      if (await this.claimed(pool, pg)) return;
+    }
+    await this.destroy("57P01", `duragres: database "${meta.name}" expired and was deleted`);
+  }
+
+  /** Closes every connection and deletes all storage, refusing new connections meanwhile. */
+  private async destroy(code: string, message: string) {
+    this.deleting = true;
+    try {
+      await Promise.all([...this.connections].map((terminate) => terminate(code, message)));
+      this.engine = undefined;
+      await this.ctx.storage.deleteAll();
+    } finally {
+      this.deleting = false;
+    }
+  }
+
+  private async claimed(pool: Pool, pg: Postgres) {
+    return pool.hold(async () => (await pg.query("SELECT 1 FROM pg_authid WHERE rolpassword IS NOT NULL LIMIT 1")).length > 0);
+  }
+
+  /** The SCRAM verifier Postgres stored for a role, or one nothing can match (unknown role, or no password). */
+  private async verifier(pool: Pool, pg: Postgres, user: string): Promise<ScramSha256Data> {
+    const rows = await pool.hold(() => pg.query<{ rolpassword: string | null }>("SELECT rolpassword FROM pg_authid WHERE rolname = $1", [user]));
+    // rolpassword is "SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>" (all base64).
+    const parsed = /^SCRAM-SHA-256\$(\d+):([^$]+)\$([^:]+):(.+)$/.exec(rows[0]?.rolpassword ?? "");
+    if (parsed) return { iterations: Number(parsed[1]), salt: parsed[2], storedKey: parsed[3], serverKey: parsed[4] };
+    return { iterations: 4096, salt: random(), storedKey: random(), serverKey: random() };
+  }
+}
+
+const reply = (...parts: Array<Uint8Array>) => new Uint8Array(parts.flatMap((p) => [...p]));
+const random = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
+
+/** Postgres's own startup ParameterStatus, with this client's role and application name. */
+function parameterStatus(pg: Postgres, user: string, applicationName: string): Array<Uint8Array> {
+  const decoder = new TextDecoder();
+  return pg.parameterStatus.map((m) => {
+    const [name] = decoder.decode(m.subarray(5)).split("\0");
+    if (name === "session_authorization") return msg.parameterStatus(name, user);
+    if (name === "application_name") return msg.parameterStatus(name, applicationName);
+    return m;
+  });
 }
