@@ -1,19 +1,5 @@
 //go:build js && wasm
 
-// TLS for Duragres's Postgres connections, compiled to WebAssembly for a Cloudflare Worker, which has
-// no server-side TLS API. The Worker owns the sockets; this code only turns the client's ciphertext
-// into plaintext and back, with Go's crypto/tls.
-//
-// JavaScript calls duragresTlsAccept(certPEM, keyPEM, direct, sendCipher, receivePlain, done) once per
-// connection and gets back { cipher(bytes|null), plain(bytes|null), release() }:
-//
-//	direct         the client began with TLS (libpq's sslnegotiation=direct): require ALPN "postgresql"
-//	cipher(bytes)  ciphertext from the client; null when the client closed its side
-//	plain(bytes)   plaintext for the client; null to close the TLS session (close_notify)
-//	sendCipher     called with ciphertext to write to the client
-//	receivePlain   called with plaintext from the client; null at its end
-//	done           called once, with an error message or null
-//	release()      frees the callbacks; call it once the connection is over, and nothing after it
 package main
 
 import (
@@ -26,8 +12,6 @@ import (
 	"time"
 )
 
-// queue is an unbounded FIFO of byte chunks: JavaScript callbacks push without blocking the event
-// loop, and goroutines pop, waiting while it is empty.
 type queue struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -55,7 +39,6 @@ func (q *queue) close() {
 	q.cond.Broadcast()
 }
 
-// pop returns the next chunk, or false once the queue is closed and drained.
 func (q *queue) pop() ([]byte, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -66,12 +49,11 @@ func (q *queue) pop() ([]byte, bool) {
 		return nil, false
 	}
 	b := q.chunks[0]
-	q.chunks[0] = nil // let the popped chunk be collected
+	q.chunks[0] = nil
 	q.chunks = q.chunks[1:]
 	return b, true
 }
 
-// cipherConn is the net.Conn crypto/tls reads ciphertext from and writes ciphertext to.
 type cipherConn struct {
 	in      *queue
 	pending []byte
@@ -120,7 +102,6 @@ func fromJS(v js.Value) []byte {
 	return b
 }
 
-// configs caches the parsed certificate: the PEM strings are the same for every connection.
 var (
 	configMu   sync.Mutex
 	configKey  string
@@ -140,8 +121,7 @@ func config(certPEM, keyPEM string) (*tls.Config, error) {
 	configLast = &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
-		// libpq 17+ sends ALPN "postgresql" and requires it for direct TLS (sslnegotiation=direct).
-		NextProtos: []string{"postgresql"},
+		NextProtos:   []string{"postgresql"},
 	}
 	configKey = certPEM + keyPEM
 	return configLast, nil
@@ -171,22 +151,19 @@ func accept(this js.Value, args []js.Value) any {
 		})
 	}
 
-	// Client to server: handshake, then plaintext until the client's close_notify or EOF.
 	go func() {
 		if err := server.Handshake(); err != nil {
 			finish(err)
 			return
 		}
-		// A direct-TLS client skipped the SSLRequest; ALPN is how it says it speaks Postgres.
 		if direct && server.ConnectionState().NegotiatedProtocol != "postgresql" {
 			finish(errors.New(`direct TLS requires the ALPN protocol "postgresql"`))
 			return
 		}
-		go func() { // server to client, in order, once the handshake is done
+		go func() {
 			for {
 				b, ok := out.pop()
 				if !ok {
-					// The database side ended: close the TLS session, which ends the connection.
 					_ = server.CloseWrite()
 					finish(nil)
 					return

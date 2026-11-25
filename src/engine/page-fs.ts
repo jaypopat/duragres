@@ -1,6 +1,3 @@
-// PostgreSQL's data directory, stored in Durable Object SQLite as 8 KiB pages.
-// Every call is synchronous, as Emscripten requires. File metadata is cached in memory;
-// page bytes are always read from SQLite.
 import { BaseFilesystem, ERRNO_CODES } from "@electric-sql/pglite/basefs";
 import type { FsStats } from "@electric-sql/pglite/basefs";
 
@@ -37,7 +34,6 @@ export class PageFs extends BaseFilesystem {
     super();
     const sql = (this.sql = storage.sql);
     createTables(sql);
-    // A data directory counts only once markInitialized() committed; anything else is a seeding that crashed.
     this.fresh = sql.exec("SELECT 1 FROM fs_meta WHERE key = 'initialized'").toArray().length === 0;
     if (this.fresh) {
       storage.transactionSync(() => {
@@ -53,7 +49,6 @@ export class PageFs extends BaseFilesystem {
     }
   }
 
-  /** Commits the seeded data directory and the sentinel that makes it count, in one transaction. */
   markInitialized(database: string) {
     this.storage.transactionSync(() => {
       this.flush();
@@ -61,7 +56,6 @@ export class PageFs extends BaseFilesystem {
     });
   }
 
-  /** The name of the Postgres database inside this data directory (a branch keeps its source's until renamed). */
   get database(): string | undefined {
     return this.sql.exec<{ value: string }>("SELECT value FROM fs_meta WHERE key = 'database'").toArray()[0]?.value;
   }
@@ -87,11 +81,10 @@ export class PageFs extends BaseFilesystem {
   private stat(n: Node): FsStats {
     return { dev: 1, ino: n.id, mode: n.mode, nlink: 1, uid: 0, gid: 0, rdev: 0, size: n.size, blksize: PAGE, blocks: Math.ceil(n.size / 512), atime: n.mtime, mtime: n.mtime, ctime: n.mtime };
   }
-  // Pages written since the last flush. Postgres appends WAL in small pieces, so one message can rewrite
-  // the same page many times; buffering turns those into one SQLite row write each.
+
   private dirty = new Map<string, { node: number; page: number; data: Uint8Array }>();
   private dirtyNodes = new Set<Node>();
-  private static readonly FLUSH_AT = 1024; // pages (8 MiB): bounds JS memory during bulk writes
+  private static readonly FLUSH_AT = 1024;
 
   private readPage(n: Node, page: number): Uint8Array {
     const buffered = this.dirty.get(`${n.id}:${page}`);
@@ -110,7 +103,6 @@ export class PageFs extends BaseFilesystem {
     for (const [key, d] of this.dirty) if (d.node === n.id && d.page >= fromPage) this.dirty.delete(key);
   }
 
-  /** Writes buffered pages and file sizes (and `database`, if given) to SQLite in one transaction. */
   flush(database?: string) {
     if (!this.dirty.size && !this.dirtyNodes.size && database === undefined) return;
     this.storage.transactionSync(() => {
@@ -199,14 +191,13 @@ export class PageFs extends BaseFilesystem {
 
   write(fd: number, data: Uint8Array | ArrayBuffer, offset: number, length: number, position: number) {
     const n = this.fd(fd);
-    const buffer = data instanceof Uint8Array ? data : new Uint8Array(data); // tar extraction passes ArrayBuffers
+    const buffer = data instanceof Uint8Array ? data : new Uint8Array(data);
     if (length === 0) return 0;
     for (let done = 0; done < length;) {
       const at = position + done;
       const within = at % PAGE;
       const take = Math.min(PAGE - within, length - done);
       const page = Math.floor(at / PAGE);
-      // A whole-page write needs no read; a partial one merges into the existing page.
       const bytes = take === PAGE ? new Uint8Array(PAGE) : this.readPage(n, page);
       bytes.set(buffer.subarray(offset + done, offset + done + take), within);
       this.writePage(n, page, bytes);
@@ -214,13 +205,9 @@ export class PageFs extends BaseFilesystem {
     }
     if (position + length > n.size) n.size = position + length;
     n.mtime = Date.now();
-    this.dirtyNodes.add(n); // size and mtime are saved with the pages at flush
+    this.dirtyNodes.add(n);
     return length;
   }
-
-  // Structural changes (truncate, unlink, rmdir, rename) first flush the buffered pages, then apply
-  // as one transaction: Postgres writes a file and renames it into place expecting its contents durable,
-  // and a crash must never leave a file's size or name ahead of its pages.
 
   truncate(path: string, len = 0) {
     const n = this.node(path);
@@ -266,10 +253,7 @@ export class PageFs extends BaseFilesystem {
     this.flush();
     this.storage.transactionSync(() => this.remove(n));
   }
-  /** Deletes a node and its pages; callers run it inside a transaction. */
   private remove(n: Node) {
-    // Open descriptors keep their Node object, so reads after unlink still see the pages until close;
-    // the pages are deleted now, which Postgres never relies on.
     this.dropDirty(n);
     this.dirtyNodes.delete(n);
     this.sql.exec("DELETE FROM fs_pages WHERE node = ?", n.id);
@@ -299,15 +283,11 @@ export class PageFs extends BaseFilesystem {
   }
 }
 
-// --- Copying a data directory to another Durable Object (CREATE DATABASE ... TEMPLATE)
-
 type NodeRow = { id: number; path: string; mode: number; size: number; mtime: number };
-/** One RPC message's worth of a data directory. The first chunk carries every node; the rest carry pages. */
 export type Chunk = { nodes?: Array<NodeRow>; pages: Array<[number, number, ArrayBuffer]> };
 
-const PAGES_PER_CHUNK = 1024; // 8 MiB per RPC message
+const PAGES_PER_CHUNK = 1024;
 
-/** The data directory's rows. The caller makes sure nothing writes to it until the copy finishes. */
 export function* exportChunks(sql: SqlStorage): Generator<Chunk> {
   let pages: Chunk["pages"] = [];
   let nodes: Array<NodeRow> | undefined = sql.exec<NodeRow>("SELECT id, path, mode, size, mtime FROM fs_nodes").toArray();
@@ -322,7 +302,6 @@ export function* exportChunks(sql: SqlStorage): Generator<Chunk> {
   yield { nodes, pages };
 }
 
-/** Writes one chunk. The first one replaces whatever was there; `finish` makes the copy count. */
 export function importChunk(storage: DurableObjectStorage, chunk: Chunk) {
   const sql = storage.sql;
   storage.transactionSync(() => {
@@ -337,7 +316,6 @@ export function importChunk(storage: DurableObjectStorage, chunk: Chunk) {
   });
 }
 
-/** Marks an imported data directory complete. `database` is the Postgres database name inside it. */
 export function finishImport(storage: DurableObjectStorage, database: string) {
   storage.sql.exec("INSERT OR REPLACE INTO fs_meta VALUES ('initialized', '1'), ('database', ?)", database);
 }

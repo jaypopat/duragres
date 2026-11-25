@@ -23,7 +23,9 @@ A new database is deleted 72 hours after it is created, unless you claim it. To 
 ALTER ROLE demo PASSWORD 'correct horse battery staple';
 ```
 
-From then on, every connection to that database authenticates with SCRAM-SHA-256 against the passwords its roles have. Before a database is claimed, anyone who knows its name can connect.
+From then on, every connection to that database authenticates with SCRAM-SHA-256 against `pg_catalog.pg_authid` (roles with `NOLOGIN`, an expired `VALID UNTIL`, or a non-SCRAM password cannot sign in). Before a database is claimed, anyone who knows its name can connect.
+
+Roles authenticate who can connect to a database, but they are **not** a security boundary inside it: every connection shares one Postgres backend and session state.
 
 ## Branch a database
 
@@ -34,7 +36,9 @@ CREATE DATABASE "try-migration" TEMPLATE "mydb";  -- copies mydb's committed dat
 DROP DATABASE "try-migration";                    -- WITH (FORCE) closes its connections first
 ```
 
-The copy gets its own storage, roles, passwords and expiry. Connected to a database, you can copy it; knowing a name, you can connect to that database or drop it. Neither statement can run inside a transaction.
+The copy gets its own storage, roles, and passwords: if the source has passwords, the copy inherits them and requires authentication immediately. Inheriting passwords protects the copy, but does **not** claim it — a branch still expires after 72 hours unless you set a password on the copy itself.
+
+An unprotected database (no passwords) can be dropped by anyone who knows its name. Once a database has passwords, it can be dropped **only** from the database it was copied from (which can always drop its copies, even after a copy sets its own password); any other `DROP DATABASE` fails with SQLSTATE `42501`. Neither statement can run inside a transaction.
 
 ## Connections share one backend
 
@@ -124,6 +128,31 @@ Stop any dev server on those ports first. The tests need Go (to build `tls/`) an
 
 New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit binding. Refused connections get SQLSTATE 53400.
 
+## Alchemy
+
+`alchemy/` (`@duragres/alchemy`) provides an Alchemy v2 resource for provisioning and branching Duragres databases, plus a standalone Postgres client (`@duragres/alchemy/client`) with no Alchemy or Effect dependency:
+
+```ts
+import * as Alchemy from "alchemy";
+import * as Duragres from "@duragres/alchemy";
+import * as Effect from "effect/Effect";
+
+export default Alchemy.Stack(
+  "MyApp",
+  { providers: Duragres.providers({ host: "db.example.com" }), state: Alchemy.localState() },
+  Effect.gen(function* () {
+    const db = yield* Duragres.Database("PreviewDatabase", {
+      name: stage,
+      template: { name: "staging-seed", user: "demo", password: seedPassword },
+    });
+    // db.origin matches Cloudflare.Hyperdrive and Neon.PostgresOrigin
+    return { origin: db.origin, connectionUri: db.connectionUri };
+  }),
+);
+```
+
+If `password` is omitted, a random password is generated once and kept in state; setting it claims and protects the database. On destroy, a branched database is dropped immediately from its template (`DROP DATABASE ... WITH (FORCE)`), while a standalone database has its passwords cleared so it expires on TTL. Workers and Functions can also bind a database via `Duragres.Connect(db)` with `Duragres.ConnectHttp`. See `examples/alchemy/` for a runnable stack.
+
 ## Layout
 
 - `src/gateway.ts` reads the StartupMessage, picks the Durable Object by database name and pipes bytes to it.
@@ -132,3 +161,4 @@ New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit bind
 - `src/engine/pool.ts` shares the backend between connections.
 - `src/postgres/` reads and writes the few protocol messages Duragres handles itself.
 - `tls/` is the `duragres-tls` Worker: `src/index.ts` negotiates TLS, and `main.go` implements it with Go's `crypto/tls`.
+- `alchemy/` is `@duragres/alchemy`: the plain Postgres client and the Alchemy v2 `Duragres.Database` resource and `Duragres.Connect` binding.

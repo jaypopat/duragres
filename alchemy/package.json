@@ -1,0 +1,33 @@
+{
+  "name": "@duragres/alchemy",
+  "version": "0.1.0",
+  "description": "Duragres Postgres databases and branches for Alchemy v2.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "bun": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./client": {
+      "types": "./src/client.ts",
+      "bun": "./src/client.ts",
+      "default": "./src/client.ts"
+    }
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  },
+  "peerDependencies": {
+    "alchemy": "^2.0.0-beta.80",
+    "effect": "^4.0.0"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "^4.1.4",
+    "@types/bun": "^1.4.5",
+    "@types/pg": "^8.23.1",
+    "alchemy": "2.0.0-beta.87",
+    "effect": "^4.1.4"
+  }
+}

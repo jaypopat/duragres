@@ -1,6 +1,3 @@
-// Backend messages Duragres writes itself: errors, notices, and the replies to the statements it
-// handles instead of Postgres (CREATE/DROP DATABASE). Postgres writes everything else.
-
 export class PgError extends Error {
   constructor(public code: string, message: string) {
     super(message);

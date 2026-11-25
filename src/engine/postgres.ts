@@ -1,5 +1,3 @@
-// PostgreSQL (our PGlite build, see engine/) running in this Durable Object, with its data directory in
-// the object's SQLite storage. One backend; src/engine/pool.ts shares it between client connections.
 import { PGlite } from "@electric-sql/pglite";
 import { exportChunks, PageFs } from "./page-fs";
 import type { Chunk } from "./page-fs";
@@ -13,20 +11,18 @@ import fsBundle from "../../engine/runtime/pglite-fs.bin";
 import seed from "../../engine/runtime/seed.bin";
 
 const MIB = 2 ** 20;
-const INITIAL_MEMORY = 64 * MIB; // the build's minimum (engine/patches)
-const MAX_MEMORY = 100 * MIB; // past this Postgres raises 53200 instead of the isolate exceeding 128 MB
-const WAL_SEGMENT_BYTES = 1n * BigInt(MIB); // engine/prepare.ts runs initdb with --wal-segsize=1
+const INITIAL_MEMORY = 64 * MIB;
+const MAX_MEMORY = 100 * MIB;
+const WAL_SEGMENT_BYTES = 1n * BigInt(MIB);
 const CONF = [
   "shared_buffers=8MB", "work_mem=2MB", "maintenance_work_mem=8MB", "temp_buffers=1MB",
   "wal_buffers=256kB", "min_wal_size=4MB", "max_wal_size=32MB",
 ];
-// PGlite's start parameters, except search_path: PGlite sets "public", Postgres's default is '"$user", public'.
 const START_PARAMS = PGlite.defaultStartParams.map((p) => (p === "search_path=public" ? 'search_path="$user", public' : p));
 
 type Callback = (...args: Array<number>) => number;
 const isCallback = (value: unknown): value is Callback => typeof value === "function";
 
-/** The engine exports our patches add (engine/patches/postgres-pglite/0002), checked at boot. */
 interface Wal {
   _GetXLogInsertRecPtr(): bigint;
   _XLogFlush(upto: bigint): void;
@@ -39,8 +35,8 @@ function walExports(module: Module): Wal {
   throw new Error("this PGlite build does not export GetXLogInsertRecPtr and XLogFlush; build engine/ (bun run engine:build)");
 }
 
-// Emscripten compiles tiny Wasm adapters at runtime to call JS callbacks, which Workers forbids.
-// PGlite registers four, all i32 functions of one or two arguments, so instantiate precompiled ones.
+// Workers forbids runtime Wasm compilation, so swap Emscripten's dynamic callback adapters and dlopen()ed
+// extensions for precompiled modules.
 const ADAPTERS = new Map([["pi", callback1], ["ppp", callback2], ["ipi", callback2], ["ppi", callback2]]);
 function precompiledCallbacks(mod: { addFunction(fn: Callback, sig: string): number }) {
   const add = mod.addFunction.bind(mod);
@@ -53,12 +49,7 @@ function precompiledCallbacks(mod: { addFunction(fn: Callback, sig: string): num
   };
 }
 
-// Postgres dlopen()s these from $libdir, and Emscripten compiles the bytes it reads there, which Workers
-// forbid. Our build exposes the dynamic linker (engine/patches/postgres-pglite/0003), so register each
-// library as a lazy entry in its preloaded table: the first dlopen() links the module wrangler precompiled.
-// Nothing dlopen()s during boot, so registering after PGlite.create() is early enough.
 const LIBRARIES = new Map([["/pglite/lib/postgresql/plpgsql.so", plpgsql], ["/pglite/lib/postgresql/dict_snowball.so", dictSnowball]]);
-/** A linked side module's exports. Only Emscripten reads them; we hand them back unopened. */
 interface LinkedLibrary { readonly linked: unique symbol }
 interface Linker {
   preloadedWasm: object;
@@ -78,7 +69,6 @@ function precompiledLibraries(mod: Module) {
   }
 }
 
-/** Thrown when the engine itself failed: its memory state is gone and the object must restart. */
 export class EngineFailure extends Error {}
 
 export class Postgres {
@@ -87,15 +77,9 @@ export class Postgres {
     private wal: Wal,
     readonly fs: PageFs,
     private storage: DurableObjectStorage,
-    /** ParameterStatus messages from the backend's own startup, replayed to every client. */
     readonly parameterStatus: Array<Uint8Array>,
   ) {}
 
-  /**
-   * Boots Postgres into the database `name`. A new object is seeded from the empty cluster in
-   * engine/runtime/seed.bin; a seeded or copied data directory whose database has another name
-   * (the seed's "postgres", or a branch's source) is renamed first.
-   */
   static async open(storage: DurableObjectStorage, name: string): Promise<Postgres> {
     let fs = pageFs(storage);
     if (fs.fresh || fs.database !== name) {
@@ -104,7 +88,7 @@ export class Postgres {
       const current = fs.database ?? "postgres";
       if (current !== name) await setup.exec(`ALTER DATABASE ${quoteIdent(current)} RENAME TO ${quoteIdent(name)}`);
       await setup.close();
-      fs.flush(name); // the renamed catalog and the name it now holds commit together
+      fs.flush(name);
       await storage.sync();
       fs = pageFs(storage);
     }
@@ -117,7 +101,6 @@ export class Postgres {
     return pg;
   }
 
-  /** Runs one client protocol message. Its effects are durable before the reply is returned. */
   async run(message: Uint8Array): Promise<Uint8Array> {
     let reply: Uint8Array;
     try {
@@ -129,13 +112,11 @@ export class Postgres {
     return reply;
   }
 
-  /** SQL the server runs for itself, between client transactions. A SQL error is thrown as is. */
   async exec(sql: string) {
     await this.db.exec(sql);
     await this.persist();
   }
 
-  /** Stops Postgres (a shutdown checkpoint) before the object deletes its storage. */
   async close() {
     await this.db.close();
   }
@@ -146,17 +127,11 @@ export class Postgres {
     return rows;
   }
 
-  /** The data directory as RPC-sized chunks. The caller holds the backend so nothing writes meanwhile. */
   async *chunks(): AsyncGenerator<Chunk> {
     await this.exec("CHECKPOINT");
     yield* exportChunks(this.storage.sql);
   }
 
-  /**
-   * Makes everything Postgres wrote durable: WAL through the last record (a client may have SET
-   * synchronous_commit = off), then the buffered pages. A failure here leaves committed state only in
-   * the engine's memory, so it is an engine failure: the object restarts and recovers from storage.
-   */
   private async persist() {
     try {
       this.wal._XLogFlush(walInsertEnd(this.wal._GetXLogInsertRecPtr(), WAL_SEGMENT_BYTES));
@@ -191,13 +166,12 @@ async function boot(fs: PageFs, database: string, seedIt: boolean) {
     postgresqlconf: CONF,
     startParams: START_PARAMS,
   });
-  precompiledLibraries(db.Module); // after create(): the linker is exposed once the module has loaded
+  precompiledLibraries(db.Module);
   return db;
 }
 
 export const quoteIdent = (s: string) => `"${s.replaceAll('"', '""')}"`;
 
-/** Backend messages in a reply (type byte, int32 length, body). */
 export function* messages(bytes: Uint8Array): Generator<Uint8Array> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = 0; i + 5 <= bytes.length;) {
@@ -213,7 +187,7 @@ function startupMessage(params: Record<string, string>): Uint8Array {
   const out = new Uint8Array(8 + pairs.length + 1);
   const view = new DataView(out.buffer);
   view.setInt32(0, out.length);
-  view.setInt32(4, 196_608); // protocol 3.0
+  view.setInt32(4, 196_608);
   out.set(pairs, 8);
   return out;
 }

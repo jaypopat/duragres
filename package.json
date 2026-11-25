@@ -18,6 +18,8 @@
     "wrangler": "4.166.0"
   },
   "workspaces": [
+    "alchemy",
+    "examples/alchemy",
     "examples/drizzle"
   ],
   "scripts": {
@@ -26,8 +28,8 @@
     "dev:tls": "bun tls/build.ts && cd tls && wrangler dev --experimental-new-config --env local",
     "deploy": "bun engine/prepare.ts && wrangler deploy --experimental-new-config",
     "deploy:tls": "bun tls/build.ts && cd tls && wrangler deploy --experimental-new-config",
-    "typecheck": "bun check && bun check -p tls && bun check -p engine && bun check -p test",
+    "typecheck": "bun check && bun check -p tls && bun check -p engine && bun check -p test && bun check -p alchemy && bun check -p examples/alchemy",
     "lint": "oxlint .",
-    "test": "bun engine/prepare.ts && bun tls/build.ts && bun test --timeout 90000"
+    "test": "bun engine/prepare.ts && bun tls/build.ts && bun test --timeout 90000 && bun test --timeout 90000 ./alchemy/test/alchemy.test.ts"
   }
 }

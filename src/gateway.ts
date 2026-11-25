@@ -1,5 +1,3 @@
-// TCP entry point. Reads the StartupMessage to learn the database name, then
-// pipes the connection to the Durable Object of that name. No SQL is parsed here.
 import { NAME_RULE, validName } from "./database/lifecycle";
 import { byteStreams, closeQuietly, refuse } from "./postgres/socket";
 
@@ -17,7 +15,6 @@ function concat(a: Uint8Array, b: Uint8Array) {
   return out;
 }
 
-/** Reads until the StartupMessage, answering SSLRequest/GSSENCRequest with 'N'. */
 async function readStartup(socket: Socket): Promise<Startup | undefined> {
   const streams = byteStreams(socket);
   const reader = streams.readable.getReader();
@@ -33,14 +30,13 @@ async function readStartup(socket: Socket): Promise<Startup | undefined> {
   };
   try {
     for (;;) {
-      // A client that closes before a full StartupMessage (port probes, health checks) is not an error.
       if (!(await need(8))) return undefined;
       const view = new DataView(buf.buffer, buf.byteOffset);
       const length = view.getInt32(0);
       const code = view.getInt32(4);
       if (length < 8 || length > MAX_STARTUP_LENGTH || !(await need(length))) return undefined;
       if (code === SSL_REQUEST || code === GSSENC_REQUEST) {
-        await writer.write(Uint8Array.of(0x4e)); // 'N': no TLS, no GSS
+        await writer.write(Uint8Array.of(0x4e));
         buf = buf.slice(length);
         continue;
       }
@@ -48,7 +44,7 @@ async function readStartup(socket: Socket): Promise<Startup | undefined> {
       const fields = new TextDecoder().decode(buf.subarray(8, length - 1)).split("\0");
       const params: Record<string, string> = {};
       for (let i = 0; i + 1 < fields.length; i += 2) params[fields[i]] = fields[i + 1];
-      return { bytes: buf, params }; // the StartupMessage plus anything sent after it
+      return { bytes: buf, params };
     }
   } finally {
     reader.releaseLock();
@@ -56,15 +52,13 @@ async function readStartup(socket: Socket): Promise<Startup | undefined> {
   }
 }
 
-/** "203.0.113.7:5432" or "[2001:db8::1]:5432" -> the address without the port. */
 const hostOf = (address: string) => address.replace(/:\d+$/, "").replace(/^\[(.*)\]$/, "$1");
 
 export async function connect(socket: Socket, env: Env) {
   const startup = await readStartup(socket);
   if (!startup) return;
 
-  // A direct connection carries the client's address. One forwarded by the duragres-tls Worker over its
-  // service binding does not, and that Worker already rate-limited it by the client's address.
+  // Service-binding hops from duragres-tls omit remoteAddress (already rate-limited there).
   const { remoteAddress } = await socket.opened;
   if (remoteAddress && !(await env.CONNECT_LIMIT.limit({ key: hostOf(remoteAddress) })).success) {
     return refuse(socket, "53400", "duragres: too many new connections from this address, try again in a minute");
@@ -77,8 +71,7 @@ export async function connect(socket: Socket, env: Env) {
 
   const upstream = env.PG.getByName(database).connect("pg:5432", { allowHalfOpen: true, secureTransport: "off" });
   await upstream.opened;
-  // Pipe DO -> client first: the DO may refuse (FATAL) and close before reading the
-  // replayed StartupMessage, and that FATAL must still reach the client.
+  // Pipe DO -> client first so an immediate FATAL from the DO still reaches the client.
   const down = upstream.readable.pipeTo(socket.writable);
   let up: Promise<void> = Promise.resolve();
   try {
@@ -87,7 +80,7 @@ export async function connect(socket: Socket, env: Env) {
     writer.releaseLock();
     up = socket.readable.pipeTo(upstream.writable);
   } catch {
-    // The DO already closed its side; `down` delivers whatever it sent.
+    // DO closed early; `down` delivers whatever it sent.
   }
   await Promise.allSettled([down, up]);
   await Promise.all([closeQuietly(socket), closeQuietly(upstream)]);

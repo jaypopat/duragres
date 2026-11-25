@@ -1,43 +1,28 @@
-// Many client connections, one Postgres backend: PgBouncer-style transaction pooling with a pool of one.
-//
-// A client owns the backend from its first message until Postgres reports ReadyForQuery with status
-// idle ('I'): through a whole transaction, and through a Parse/Bind/Execute batch up to its Sync.
-// Other clients queue meanwhile. Each client's named statements and portals get a prefix so two
-// clients' "s1" never collide. As in PgBouncer transaction mode, plain SET, temp tables, LISTEN,
-// session advisory locks and the unnamed prepared statement are shared by every client.
-//
-// The backend is authenticated as postgres and switches to each owner's role with SET SESSION
-// AUTHORIZATION, so a role is not a security boundary inside one database: any client can switch back.
+// Transaction-mode pooling over PGlite's single backend, with per-client statement prefixes.
 import { readyStatus, renameStatements } from "../postgres/messages";
 import { quoteIdent } from "./postgres";
 import type { Postgres } from "./postgres";
 
-const IDLE_IN_TRANSACTION_MS = 30_000; // a client holding the backend this long without a message is disconnected
-const IDLE_WHILE_OTHERS_WAIT_MS = 5000; // ... or this long while other clients wait for it
-const CHECKPOINT_AFTER_IDLE_MS = 3000; // an evicted object replays WAL since its last checkpoint on boot
+const IDLE_IN_TRANSACTION_MS = 30_000;
+const IDLE_WHILE_OTHERS_WAIT_MS = 5000;
+const CHECKPOINT_AFTER_IDLE_MS = 3000;
 
-/** One client connection's view of the backend. */
 export interface Client {
   readonly user: string;
-  /** Runs one protocol message, waiting for the backend if another client holds it. */
   send(message: Uint8Array): Promise<Uint8Array>;
-  /** This client's transaction status for a ReadyForQuery Duragres writes itself. */
   status(): string;
-  /** Rolls back what the client left open and drops its statements. Waits for a message in flight. */
   close(): Promise<void>;
 }
 
 interface Holder {
-  /** The role the backend runs as while this holder owns it. */
   user: string;
-  /** Called when the client held the backend idle for too long; ends its connection. */
   evict(code: string, message: string): void;
 }
 
 export class Pool {
   private owner: Holder | null = null;
   private waiters: Array<{ holder: Holder; grant: () => void }> = [];
-  private running = false; // a message is executing, so the owner is not idle
+  private running = false;
   private txStatus = "I";
   private nextId = 1;
   private idleTimer?: ReturnType<typeof setTimeout>;
@@ -47,7 +32,6 @@ export class Pool {
 
   constructor(private pg: Postgres) {}
 
-  /** A client for `user`, creating the role on first use. */
   async connect(user: string, evict: Holder["evict"]): Promise<Client> {
     await this.hold(async () => {
       const found = await this.pg.query("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1", [user]);
@@ -63,7 +47,7 @@ export class Pool {
     const send = async (message: Uint8Array) => {
       await this.acquire(holder);
       if (closed) {
-        this.release(holder); // a message queued behind others when its connection went away
+        this.release(holder);
         throw new Error("connection closed");
       }
       this.running = true;
@@ -92,12 +76,12 @@ export class Pool {
         closed = true;
         await inFlight;
         if (this.owner !== holder) {
-          this.release(holder); // drops it from the waiters
+          this.release(holder);
           if (statements.size) await this.hold(() => this.deallocate([...statements]));
           return;
         }
         try {
-          await this.pg.run(SYNC); // ends a half-sent extended-protocol batch
+          await this.pg.run(SYNC);
           if (this.txStatus !== "I") await this.pg.exec("ROLLBACK");
           this.txStatus = "I";
           if (statements.size) await this.deallocate([...statements]);
@@ -108,7 +92,6 @@ export class Pool {
     };
   }
 
-  /** Runs `work` as postgres on the idle backend, for the server's own SQL (roles, auth lookups, checkpoints, branch copies). */
   async hold<T>(work: () => Promise<T>): Promise<T> {
     const server: Holder = { user: "postgres", evict: () => {} };
     await this.acquire(server);
@@ -119,7 +102,6 @@ export class Pool {
     }
   }
 
-  /** Stops the timers. The pool is unusable afterwards; the object is deleting its storage. */
   dispose() {
     this.disposed = true;
     clearTimeout(this.idleTimer);
@@ -130,7 +112,6 @@ export class Pool {
     try {
       await this.pg.exec(names.map((name) => `DEALLOCATE ${quoteIdent(name)};`).join(" "));
     } catch {
-      // One of them was already gone, which aborts the batch; drop the rest one by one.
       for (const name of names) await this.pg.exec(`DEALLOCATE ${quoteIdent(name)}`).catch(() => {});
     }
   }
@@ -144,13 +125,12 @@ export class Pool {
       const granted = new Promise<void>((grant) => {
         this.waiters.push({ holder, grant });
       });
-      if (this.waiters.length === 1 && !this.running) this.armIdleTimer(); // the owner is idle; others now wait on it
+      if (this.waiters.length === 1 && !this.running) this.armIdleTimer();
       await granted;
     } else {
       this.owner = holder;
     }
     clearTimeout(this.checkpointTimer);
-    // Every handoff sets the role again: a client can change it (SET ROLE, RESET SESSION AUTHORIZATION).
     try {
       await this.pg.exec(`RESET ROLE; SET SESSION AUTHORIZATION ${quoteIdent(holder.user)}`);
     } catch (error) {
@@ -173,7 +153,6 @@ export class Pool {
     }
   }
 
-  /** The owner sent nothing but still holds the backend (open transaction, or a batch without Sync). */
   private armIdleTimer() {
     clearTimeout(this.idleTimer);
     const owner = this.owner;
@@ -189,11 +168,11 @@ export class Pool {
     clearTimeout(this.checkpointTimer);
     if (this.disposed || this.pg.fs.stats.pageWrites === this.writesAtCheckpoint) return;
     this.checkpointTimer = setTimeout(() => {
-      if (this.owner || this.disposed) return; // busy again; the next idle period reschedules
+      if (this.owner || this.disposed) return;
       void this.hold(async () => {
         await this.pg.exec("CHECKPOINT");
         this.writesAtCheckpoint = this.pg.fs.stats.pageWrites;
-      }).catch(() => {}); // retried after the next idle period; an engine failure also surfaces on the next message
+      }).catch(() => {});
     }, CHECKPOINT_AFTER_IDLE_MS);
   }
 }

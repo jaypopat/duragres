@@ -22,7 +22,7 @@ const worker = defineWorker(({ mode }) => {
     env: {
       PG: bindings.durableObject({ worker: duragres, exportName: "PgDO" }),
       // New connections per client IP, and new databases per source database, per minute.
-      CONNECT_LIMIT: bindings.rateLimit({ namespace: "1001", simple: { limit: test ? 20 : 60, period: 60 } }),
+      CONNECT_LIMIT: bindings.rateLimit({ namespace: "1001", simple: { limit: test ? 30 : 60, period: 60 } }),
       LIMITS: bindings.json({
         ttlSeconds: test ? 30 : 72 * 3600, // unclaimed databases are deleted this long after creation
         idleSeconds: test ? 6 : 600, // idle connections are closed (57P05)

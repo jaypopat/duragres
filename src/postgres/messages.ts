@@ -1,10 +1,8 @@
-// The few frontend/backend message fields Duragres reads. Everything else passes to Postgres untouched.
 import { PgError } from "./wire";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 
-/** The transaction status of the last ReadyForQuery in a backend reply: 'I' idle, 'T' in a transaction, 'E' failed. */
 export function readyStatus(reply: Uint8Array): string | undefined {
   const view = new DataView(reply.buffer, reply.byteOffset, reply.byteLength);
   let status: string | undefined;
@@ -14,21 +12,16 @@ export function readyStatus(reply: Uint8Array): string | undefined {
   return status;
 }
 
-const NAMEDATALEN = 63; // longest identifier Postgres keeps, in bytes
+const NAMEDATALEN = 63;
 
-/** 64-bit FNV-1a, as hex: shortens names that would not fit after the prefix. */
 function fnv1a(text: string): string {
-  let hash = 14_695_981_039_346_656_037n; // FNV offset basis
+  let hash = 14_695_981_039_346_656_037n;
   for (const byte of encoder.encode(text)) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 1_099_511_628_211n);
   return hash.toString(16);
 }
 
-/**
- * Puts `prefix` on named prepared statements and portals in Parse, Bind, Describe, Close and Execute,
- * so clients sharing one backend never collide. A name that would exceed 63 bytes becomes a hash,
- * because Postgres would truncate it. Unnamed ("") ones are left alone: the pool never switches clients
- * between a Parse and its Sync. `track` sees each prefixed statement name created and closed.
- */
+// Prefix named statements/portals per connection so clients sharing one backend never collide;
+// names past Postgres's 63-byte NAMEDATALEN are hashed instead of truncated.
 export function renameStatements(msg: Uint8Array, prefix: string, track: (event: "parse" | "close", name: string) => void): Uint8Array {
   const body = msg.subarray(5);
   const rename = (name: string) => {
@@ -37,26 +30,26 @@ export function renameStatements(msg: Uint8Array, prefix: string, track: (event:
     return encoder.encode(full).length <= NAMEDATALEN ? full : `${prefix}h${fnv1a(name)}`;
   };
   switch (msg[0]) {
-    case 0x50: { // Parse: statement, query, parameter types
+    case 0x50: {
       const [name, rest] = cstr(body, 0);
       if (!name) return msg;
       track("parse", rename(name));
       return message(0x50, encode(rename(name)), body.subarray(rest));
     }
-    case 0x42: { // Bind: portal, statement, the rest
+    case 0x42: {
       const [portal, a] = cstr(body, 0);
       const [statement, b] = cstr(body, a);
       if (!portal && !statement) return msg;
       return message(0x42, encode(rename(portal)), encode(rename(statement)), body.subarray(b));
     }
-    case 0x44: // Describe and Close: 'S' or 'P', then a name
+    case 0x44:
     case 0x43: {
       const [name] = cstr(body, 1);
       if (!name) return msg;
-      if (msg[0] === 0x43 && body[0] === 0x53) track("close", rename(name)); // Close 'S'
+      if (msg[0] === 0x43 && body[0] === 0x53) track("close", rename(name));
       return message(msg[0], body.subarray(0, 1), encode(rename(name)));
     }
-    case 0x45: { // Execute: portal, row limit
+    case 0x45: {
       const [portal, rest] = cstr(body, 0);
       if (!portal) return msg;
       return message(0x45, encode(rename(portal)), body.subarray(rest));
@@ -66,17 +59,12 @@ export function renameStatements(msg: Uint8Array, prefix: string, track: (event:
   }
 }
 
-/** The SQL text of a simple Query ('Q') or a Parse ('P'), else undefined. */
 export function sqlText(msg: Uint8Array): string | undefined {
   if (msg[0] === 0x51) return decoder.decode(msg.subarray(5, msg.length - 1));
   if (msg[0] === 0x50) return cstr(msg.subarray(5), cstr(msg.subarray(5), 0)[1])[0];
   return undefined;
 }
 
-/**
- * True for COPY ... FROM STDIN, which PGlite cannot serve: it reads COPY data from the command's own
- * input. Comments and string literals are skipped, so COPY (SELECT 'from stdin') TO STDOUT is not one.
- */
 export function isCopyFromStdin(sql: string): boolean {
   const t = tokens(sql);
   let i = 0;
@@ -95,10 +83,6 @@ export type DatabaseCommand =
   | { kind: "create"; name: string; template?: string }
   | { kind: "drop"; name: string; ifExists: boolean; force: boolean };
 
-/**
- * CREATE DATABASE and DROP DATABASE, which act on other Durable Objects instead of this backend.
- * Returns undefined for any other statement. Supports TEMPLATE, IF EXISTS and WITH (FORCE).
- */
 export function databaseCommand(sql: string): DatabaseCommand | undefined {
   const t = tokens(sql);
   let i = 0;
@@ -149,7 +133,6 @@ export function databaseCommand(sql: string): DatabaseCommand | undefined {
 
 type Token = { ident: string; word?: string; symbol?: string };
 
-/** Identifiers (quoted or not), keywords, string literals and punctuation. Unquoted identifiers fold to lower case. */
 function tokens(sql: string): Array<Token> {
   const out: Array<Token> = [];
   const re = /\s+|--[^\n]*|\/\*[\s\S]*?\*\/|'(?:[^']|'')*'|"((?:[^"]|"")*)"|([A-Za-z_][A-Za-z0-9_$]*)|([=(),;])|(.)/gy;
@@ -163,7 +146,6 @@ function tokens(sql: string): Array<Token> {
   return out;
 }
 
-/** A NUL-terminated string at `at`, and the offset after it. A missing NUL reads to the end. */
 function cstr(bytes: Uint8Array, at: number): [string, number] {
   const nul = bytes.indexOf(0, at);
   const end = nul === -1 ? bytes.length : nul;
