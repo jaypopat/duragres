@@ -162,3 +162,4 @@ If `password` is omitted, a random password is generated once and kept in state;
 - `src/postgres/` reads and writes the few protocol messages Duragres handles itself.
 - `tls/` is the `duragres-tls` Worker: `src/index.ts` negotiates TLS, and `main.go` implements it with Go's `crypto/tls`.
 - `alchemy/` is `@duragres/alchemy`: the plain Postgres client and the Alchemy v2 `Duragres.Database` resource and `Duragres.Connect` binding.
+- `skills/duragres/SKILL.md` is an agent skill (`npx skills add jaypopat/duragres`) covering branching, claiming, single-backend pooling rules, and `@duragres/alchemy`.
