@@ -39,13 +39,6 @@ When testing a schema migration against an existing database:
 2. Run the migration and tests against the branch URL.
 3. Drop the branch from the source database: `DROP DATABASE "test-mig-<id>" WITH (FORCE)`.
 
-## Local development
-
-```sh
-bun run dev
-psql 'postgres://demo@localhost:8788/mydb?sslmode=disable'
-```
-
 ## Alchemy v2 (`@duragres/alchemy`)
 
 ```ts
