@@ -2,19 +2,6 @@
 
 Connect any PostgreSQL client to a Cloudflare Durable Object. The database name in the connection string picks the object, and connecting to a new name creates it. Each database runs PostgreSQL 19, compiled to WebAssembly by [PGlite](https://pglite.dev), inside its object. Postgres's data directory is stored in the object's SQLite storage.
 
-## Local development
-
-```sh
-bun install --frozen-lockfile
-bun run dev
-psql 'postgres://demo@localhost:8788/mydb?sslmode=disable'
-```
-
-`bin/psql` runs psql 18 from Docker if you don't have it installed.
-
-To try Drizzle, export that URL as `DATABASE_URL`, then run `bun run migrate` and `bun run demo` in `examples/drizzle`.
-
-
 ## Claim a database
 
 A new database is deleted 72 hours after it is created, unless you claim it. To claim it, give a role a password:
@@ -86,8 +73,6 @@ Point Spectrum only at `duragres-tls`. The `duragres` Worker accepts plaintext a
 Renew the certificate before it expires, every 90 days for Let's Encrypt, and put the new files with the same two commands.
 
 Clients then connect with `postgres://demo:<password>@db.example.com:5432/mydb?sslmode=verify-full`.
-
-To run TLS locally, put a certificate for `localhost` in `tls/.dev.vars` as `TLS_CERT="…"` and `TLS_KEY="…"` (PEM, with `\n` for line breaks). Run `bun run dev` and `bun run dev:tls`, then connect to port 8789. Locally, `duragres-tls` dials `duragres` on port 8788, because wrangler cannot run a TCP service binding between two dev processes.
 
 ## Limits
 
