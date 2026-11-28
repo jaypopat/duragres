@@ -41,6 +41,35 @@ The copy gets its own storage, roles, and passwords: if the source has passwords
 
 An unprotected database (no passwords) can be dropped by anyone who knows its name. Once a database has passwords, it can be dropped **only** from the database it was copied from (which can always drop its copies, even after a copy sets its own password); any other `DROP DATABASE` fails with SQLSTATE `42501`. Neither statement can run inside a transaction.
 
+## Alchemy
+
+Install [`@duragres/alchemy`](alchemy/) for an Alchemy v2 resource that provisions and branches Duragres databases, plus a standalone Postgres client (`@duragres/alchemy/client`) with no Alchemy or Effect dependency:
+
+```sh
+bun add @duragres/alchemy
+```
+
+```ts
+import * as Duragres from "@duragres/alchemy";
+import * as Alchemy from "alchemy";
+import { Effect } from "effect";
+
+export default Alchemy.Stack(
+  "MyApp",
+  { providers: Duragres.providers({ host: "duragres.jaypopat.me" }), state: Alchemy.localState() },
+  Effect.gen(function* () {
+    const db = yield* Duragres.Database("PreviewDatabase", {
+      name: stage,
+      template: { name: "staging-seed", user: "demo", password: seedPassword },
+    });
+    // db.origin matches Cloudflare.Hyperdrive and Neon.PostgresOrigin
+    return { origin: db.origin, connectionUri: db.connectionUri };
+  }),
+);
+```
+
+If `password` is omitted, a random password is generated once and kept in state; setting it claims and protects the database. On destroy, a branched database is dropped immediately from its template (`DROP DATABASE ... WITH (FORCE)`), while a standalone database has its passwords cleared so it expires on TTL. Workers and Functions can also bind a database via `Duragres.Connect(db)` with `Duragres.ConnectHttp`. See `examples/alchemy/` for a runnable stack.
+
 ## Connections share one backend
 
 PGlite runs one Postgres backend per database. Duragres shares it between connections the way PgBouncer's transaction mode shares a server connection, so the same rules apply:
@@ -70,7 +99,7 @@ To set it up for a hostname such as `db.example.com`:
    certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/cloudflare.ini -d db.example.com
    ```
 
-2. Deploy both Workers and give `duragres-tls` the certificate. `deploy:tls` needs Go; on the first deploy of `duragres-tls`, supply `TLS_CERT` and `TLS_KEY` via `--secrets-file` (JSON or dotenv):
+2. Deploy both Workers and give `duragres-tls` the certificate. Building the TLS Worker needs Go; on the first deploy of `duragres-tls`, supply `TLS_CERT` and `TLS_KEY` via `--secrets-file` (JSON or dotenv):
 
    ```sh
    bun run deploy
@@ -130,31 +159,6 @@ Stop any dev server on those ports first. The tests need Go (to build `tls/`) an
 `cloudflare.config.ts` defines the Worker, its Durable Object, bindings and limits. Wrangler reads it with `--experimental-new-config` and generates the `Env` type into `.cloudflare/types`. `wrangler dev --env test` evaluates it in test mode, with short limits for the lifecycle tests.
 
 New connections are limited per client IP by the `CONNECT_LIMIT` rate-limit binding. Refused connections get SQLSTATE 53400.
-
-## Alchemy
-
-`alchemy/` (`@duragres/alchemy`) provides an Alchemy v2 resource for provisioning and branching Duragres databases, plus a standalone Postgres client (`@duragres/alchemy/client`) with no Alchemy or Effect dependency:
-
-```ts
-import * as Alchemy from "alchemy";
-import * as Duragres from "@duragres/alchemy";
-import * as Effect from "effect/Effect";
-
-export default Alchemy.Stack(
-  "MyApp",
-  { providers: Duragres.providers({ host: "duragres.jaypopat.me" }), state: Alchemy.localState() },
-  Effect.gen(function* () {
-    const db = yield* Duragres.Database("PreviewDatabase", {
-      name: stage,
-      template: { name: "staging-seed", user: "demo", password: seedPassword },
-    });
-    // db.origin matches Cloudflare.Hyperdrive and Neon.PostgresOrigin
-    return { origin: db.origin, connectionUri: db.connectionUri };
-  }),
-);
-```
-
-If `password` is omitted, a random password is generated once and kept in state; setting it claims and protects the database. On destroy, a branched database is dropped immediately from its template (`DROP DATABASE ... WITH (FORCE)`), while a standalone database has its passwords cleared so it expires on TTL. Workers and Functions can also bind a database via `Duragres.Connect(db)` with `Duragres.ConnectHttp`. See `examples/alchemy/` for a runnable stack.
 
 ## Layout
 
