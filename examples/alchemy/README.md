@@ -2,22 +2,14 @@
 
 Provisions a claimed seed database and a per-stage preview branch on Duragres using [`@duragres/alchemy`](../../alchemy).
 
-## Run locally
+## Run against the hosted endpoint
 
-1. Start Duragres in the repo root:
+```sh
+DURAGRES_HOST=duragres.jaypopat.me bun run deploy --stage pr-123
+DURAGRES_HOST=duragres.jaypopat.me bun run destroy --stage pr-123
+```
 
-   ```sh
-   bun run dev
-   ```
-
-2. Deploy and tear down a preview stage from this directory:
-
-   ```sh
-   bun run deploy --stage pr-123
-   bun run destroy --stage pr-123
-   ```
-
-To target a deployed Duragres host over TLS instead of localhost, set `DURAGRES_HOST=db.example.com` (and optionally `DURAGRES_PORT` / `DURAGRES_SSLMODE`).
+To target your own Duragres deployment, swap `DURAGRES_HOST` (and optionally set `DURAGRES_PORT` / `DURAGRES_SSLMODE`). Without `DURAGRES_HOST`, the example defaults to `127.0.0.1:8788` (`sslmode=disable`).
 
 ## Wiring into Cloudflare Hyperdrive or a Worker
 

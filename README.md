@@ -2,6 +2,20 @@
 
 Connect any PostgreSQL client to a Cloudflare Durable Object. The database name in the connection string picks the object, and connecting to a new name creates it. Each database runs PostgreSQL 19, compiled to WebAssembly by [PGlite](https://pglite.dev), inside its object. Postgres's data directory is stored in the object's SQLite storage.
 
+## Try it
+
+Pick any database name (3–63 chars, `a-z`, `0-9`, `-`) and connect directly:
+
+```sh
+psql 'postgres://demo@duragres.jaypopat.me/mydb'
+```
+
+For coding agents, install the skill:
+
+```sh
+npx skills add jaypopat/duragres
+```
+
 ## Claim a database
 
 A new database is deleted 72 hours after it is created, unless you claim it. To claim it, give a role a password:
@@ -56,23 +70,27 @@ To set it up for a hostname such as `db.example.com`:
    certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/cloudflare.ini -d db.example.com
    ```
 
-2. Deploy both Workers and give `duragres-tls` the certificate. `deploy:tls` needs Go.
+2. Deploy both Workers and give `duragres-tls` the certificate. `deploy:tls` needs Go; on the first deploy of `duragres-tls`, supply `TLS_CERT` and `TLS_KEY` via `--secrets-file` (JSON or dotenv):
 
    ```sh
    bun run deploy
-   bun run deploy:tls
-   cd tls
-   bunx wrangler secret put TLS_CERT < /etc/letsencrypt/live/db.example.com/fullchain.pem
-   bunx wrangler secret put TLS_KEY < /etc/letsencrypt/live/db.example.com/privkey.pem
+   bun tls/build.ts
+   cd tls && bunx wrangler deploy --experimental-new-config --secrets-file /path/to/tls-secrets.json
    ```
 
 3. Create a Spectrum TCP application for `db.example.com` on port 5432 with the `duragres-tls` Worker as its origin. Leave Edge TLS Termination off, because the Worker negotiates TLS after the SSLRequest.
 
 Point Spectrum only at `duragres-tls`. The `duragres` Worker accepts plaintext and rate-limits only connections that carry a client address.
 
-Renew the certificate before it expires, every 90 days for Let's Encrypt, and put the new files with the same two commands.
+Renew the certificate before it expires, every 90 days for Let's Encrypt, and update the secrets in `tls/`:
 
-Clients then connect with `postgres://demo:<password>@db.example.com:5432/mydb?sslmode=verify-full`.
+```sh
+cd tls
+bunx wrangler secret put TLS_CERT < /etc/letsencrypt/live/db.example.com/fullchain.pem
+bunx wrangler secret put TLS_KEY < /etc/letsencrypt/live/db.example.com/privkey.pem
+```
+
+Clients then connect with `postgres://demo:<password>@db.example.com/mydb?sslmode=verify-full`.
 
 ## Limits
 
@@ -124,7 +142,7 @@ import * as Effect from "effect/Effect";
 
 export default Alchemy.Stack(
   "MyApp",
-  { providers: Duragres.providers({ host: "db.example.com" }), state: Alchemy.localState() },
+  { providers: Duragres.providers({ host: "duragres.jaypopat.me" }), state: Alchemy.localState() },
   Effect.gen(function* () {
     const db = yield* Duragres.Database("PreviewDatabase", {
       name: stage,

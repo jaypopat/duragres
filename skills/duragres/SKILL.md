@@ -7,6 +7,12 @@ description: Use Duragres (PostgreSQL 19 on Cloudflare Durable Objects) for disp
 
 Duragres routes every PostgreSQL connection by database name to a Cloudflare Durable Object running PostgreSQL 19 (PGlite) on DO SQLite. Postgres itself is the control plane—no separate REST API or API key is required.
 
+Public hosted endpoint (TLS required, default port 5432):
+
+```sh
+psql 'postgres://demo@duragres.jaypopat.me/<db-name>'
+```
+
 ## Core rules
 
 - **Database names:** 3–63 chars, `a-z`, `0-9`, and `-`, starting with a letter or digit (`template0` and `template1` are reserved).
@@ -48,7 +54,7 @@ import { Effect } from "effect";
 
 export default Alchemy.Stack(
   "MyApp",
-  { providers: Duragres.providers({ host: "db.example.com" }), state: Alchemy.localState() },
+  { providers: Duragres.providers({ host: "duragres.jaypopat.me" }), state: Alchemy.localState() },
   Effect.gen(function* () {
     const db = yield* Duragres.Database("PreviewDatabase", {
       name: stage,

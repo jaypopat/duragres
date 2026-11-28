@@ -30,7 +30,8 @@ export const DATABASE_NAME = /^[a-z0-9][a-z0-9-]{2,62}$/;
 
 export function connectionString(server: Server, database: string, { user, password }: Credentials): string {
   const host = server.host.includes(":") && !server.host.startsWith("[") ? `[${server.host}]` : server.host;
-  const url = new URL(`postgres://${host}:${server.port ?? 5432}/${encodeURIComponent(database)}`);
+  const port = server.port && server.port !== 5432 ? `:${server.port}` : "";
+  const url = new URL(`postgres://${host}${port}/${encodeURIComponent(database)}`);
   url.username = user;
   if (password !== undefined && password !== "") url.password = password;
   url.searchParams.set("sslmode", server.sslmode ?? "verify-full");

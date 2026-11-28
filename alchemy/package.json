@@ -2,19 +2,47 @@
   "name": "@duragres/alchemy",
   "version": "0.1.0",
   "description": "Duragres Postgres databases and branches for Alchemy v2.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaypopat/duragres.git",
+    "directory": "alchemy"
+  },
+  "homepage": "https://github.com/jaypopat/duragres#readme",
+  "keywords": [
+    "duragres",
+    "alchemy",
+    "postgres",
+    "postgresql",
+    "cloudflare",
+    "durable-objects",
+    "pglite"
+  ],
   "type": "module",
   "sideEffects": false,
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "bun": "./src/index.ts",
-      "default": "./src/index.ts"
+      "default": "./dist/index.js"
     },
     "./client": {
-      "types": "./src/client.ts",
+      "types": "./dist/client.d.ts",
       "bun": "./src/client.ts",
-      "default": "./src/client.ts"
+      "default": "./dist/client.js"
     }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
     "pg": "^8.22.0"
