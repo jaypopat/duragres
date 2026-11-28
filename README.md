@@ -83,23 +83,12 @@ Code that holds a transaction on one connection and waits for a query on another
 
 ## TLS
 
-Production clients connect to the `duragres-tls` Worker in `tls/`, not to the `duragres` Worker. It negotiates TLS the way a Postgres server does, then forwards plaintext to `duragres` over a service binding:
+Production traffic hits the `duragres-tls` Worker in `tls/`, which runs Go's `crypto/tls` compiled to WebAssembly (`tls/main.go`) because Workers have no server-side TLS, then forwards plaintext to `duragres` over a service binding. It supports both Postgres `SSLRequest` and libpq 17 direct TLS (`ALPN: postgresql`), refuses plaintext with SQLSTATE `28000`, and rate-limits new connections per client IP.
 
-- A client that sends an SSLRequest, as node-postgres and libpq do, gets `S` and then a TLS handshake.
-- A client that starts with TLS directly (libpq 17's `sslnegotiation=direct`) gets one too, with the ALPN protocol `postgresql`.
-- A plaintext connection is refused with SQLSTATE 28000.
+<details>
+<summary>Self-hosting TLS</summary>
 
-Go's `crypto/tls` does the TLS work. `tls/main.go` compiles to WebAssembly because Workers have no server-side TLS. `duragres-tls` also rate-limits new connections per client IP, because `duragres` cannot see the client's address behind the service binding.
-
-To set it up for a hostname such as `db.example.com`:
-
-1. Get a certificate for the hostname, for example with certbot's Cloudflare DNS plugin:
-
-   ```sh
-   certbot certonly --dns-cloudflare --dns-cloudflare-credentials ~/.secrets/cloudflare.ini -d db.example.com
-   ```
-
-2. Deploy both Workers and give `duragres-tls` the certificate. Building the TLS Worker needs Go; on the first deploy of `duragres-tls`, supply `TLS_CERT` and `TLS_KEY` via `--secrets-file` (JSON or dotenv):
+1. Issue a cert for your hostname (e.g. via Let's Encrypt DNS-01) and deploy both Workers (building `tls/` requires Go; first deploy supplies `TLS_CERT` and `TLS_KEY` via `--secrets-file`):
 
    ```sh
    bun run deploy
@@ -107,19 +96,13 @@ To set it up for a hostname such as `db.example.com`:
    cd tls && bunx wrangler deploy --experimental-new-config --secrets-file /path/to/tls-secrets.json
    ```
 
-3. Create a Spectrum TCP application for `db.example.com` on port 5432 with the `duragres-tls` Worker as its origin. Leave Edge TLS Termination off, because the Worker negotiates TLS after the SSLRequest.
+2. Point a Cloudflare Spectrum TCP application on port 5432 at `duragres-tls` (not `duragres`), with Edge TLS Termination off.
 
-Point Spectrum only at `duragres-tls`. The `duragres` Worker accepts plaintext and rate-limits only connections that carry a client address.
+3. Rotate the cert before expiry with `wrangler secret put TLS_CERT` and `wrangler secret put TLS_KEY` in `tls/`.
 
-Renew the certificate before it expires, every 90 days for Let's Encrypt, and update the secrets in `tls/`:
+Clients connect with `postgres://demo:<password>@db.example.com/mydb?sslmode=verify-full`.
 
-```sh
-cd tls
-bunx wrangler secret put TLS_CERT < /etc/letsencrypt/live/db.example.com/fullchain.pem
-bunx wrangler secret put TLS_KEY < /etc/letsencrypt/live/db.example.com/privkey.pem
-```
-
-Clients then connect with `postgres://demo:<password>@db.example.com/mydb?sslmode=verify-full`.
+</details>
 
 ## Limits
 
